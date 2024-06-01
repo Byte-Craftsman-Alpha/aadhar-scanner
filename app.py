@@ -93,7 +93,10 @@ class FileUploader(tk.Tk):
                 EC.text_to_be_present_in_element((By.CLASS_NAME, "demo-list-content"), "India")
             )
             self.process_label.config(text="[22%] Processing...")
-                
+            driver.execute_script('''document.querySelector('.demo-list-content').querySelectorAll('span').forEach(text => {
+                                         text.innerText = text.innerText + ' ';
+                                    })
+                                    ''')
             reponse = driver.execute_script("return document.querySelector('.demo-list-content').innerText")
             self.process_label.config(text="[60%] Processing...")
     
