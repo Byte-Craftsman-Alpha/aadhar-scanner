@@ -129,6 +129,10 @@ class FileUploader(tk.Tk):
             output = WebDriverWait(driver, 10).until(
                 EC.text_to_be_present_in_element((By.CLASS_NAME, "demo-list-content"), "India")
             )
+            driver.execute_script('''document.querySelector('.demo-list-content').querySelectorAll('span').forEach(text => {
+                                         text.innerText = text.innerText + ' ';
+                                    })
+                                    ''')
             self.process_label.config(text="[22%] Processing...")
                 
             reponse = driver.execute_script("return document.querySelector('.demo-list-content').innerText")
