@@ -853,13 +853,14 @@ DEMO_HTML = """<!doctype html>
   <script src="https://code.iconify.design/iconify-icon/1.0.8/iconify-icon.min.js"></script>
   <style>
     :root {
-      --bg: #f4f5f6;
-      --surface: #fcfcfb;
-      --ink: #212326;
-      --muted: #6f747c;
-      --line: #e5e7ea;
-      --accent: #4b6b8f;
-      --accent-soft: #e9eef5;
+      --bg: #0f1824;
+      --surface: #132131;
+      --surface-2: #1a2b3e;
+      --ink: #edf4fb;
+      --muted: #8ea3b8;
+      --line: #26384c;
+      --accent: #39a6ff;
+      --accent-soft: #1c3147;
       --success: #2f7d53;
       --danger: #a44747;
       --radius: 14px;
@@ -892,7 +893,7 @@ DEMO_HTML = """<!doctype html>
       margin: 0;
       background: var(--bg);
       color: var(--ink);
-      font-family: "Inter", "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+      font-family: "Manrope", "Segoe UI", ui-sans-serif, system-ui, sans-serif;
       -webkit-font-smoothing: antialiased;
       text-rendering: optimizeLegibility;
     }
@@ -910,8 +911,8 @@ DEMO_HTML = """<!doctype html>
       position: sticky;
       top: 0;
       z-index: 30;
-      backdrop-filter: blur(12px);
-      background: color-mix(in srgb, var(--surface) 88%, transparent);
+      backdrop-filter: blur(16px);
+      background: color-mix(in srgb, var(--surface) 92%, transparent);
       border-bottom: 1px solid var(--line);
       padding: env(safe-area-inset-top) 12px 10px;
     }
@@ -966,6 +967,31 @@ DEMO_HTML = """<!doctype html>
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
+    }
+    .hero {
+      text-align: center;
+      padding: 8px 0 14px;
+    }
+    .hero-avatar {
+      width: 72px;
+      height: 72px;
+      border-radius: 50%;
+      border: 2px solid var(--line);
+      object-fit: cover;
+      display: block;
+      margin: 0 auto 8px;
+      background: var(--surface-2);
+    }
+    .hero-name {
+      margin: 0;
+      font-size: 1.25rem;
+      font-weight: 800;
+    }
+    .hero-meta {
+      margin: 4px 0 0;
+      color: var(--muted);
+      font-size: .86rem;
+      line-height: 1.35;
     }
 
     .popup {
@@ -1085,35 +1111,64 @@ DEMO_HTML = """<!doctype html>
     .ok { color: var(--success); }
     .bad { color: var(--danger); }
 
-    .table-wrap {
-      overflow: auto;
+    .records-grid {
+      display: grid;
+      gap: 10px;
+      margin-top: 10px;
+    }
+    .record-tile {
       border: 1px solid var(--line);
+      background: linear-gradient(165deg, color-mix(in srgb, var(--surface) 92%, white 8%), var(--surface-2));
       border-radius: 12px;
-      max-height: 62vh;
+      padding: 10px;
+      animation: reveal .26s ease both;
+      transition: transform .16s ease, border-color .2s ease;
     }
-    table {
-      width: 100%;
-      border-collapse: separate;
-      border-spacing: 0;
-      min-width: 640px;
-      font-size: .84rem;
+    .record-tile:active {
+      transform: scale(.992);
+      border-color: color-mix(in srgb, var(--accent) 36%, var(--line));
     }
-    th, td {
-      padding: 9px;
-      border-bottom: 1px solid var(--line);
-      text-align: left;
-      white-space: nowrap;
-      vertical-align: middle;
-    }
-    th {
-      position: sticky;
-      top: 0;
-      z-index: 1;
-      background: color-mix(in srgb, var(--surface) 92%, var(--accent-soft));
+    .tile-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 8px;
+      font-size: .76rem;
       color: var(--muted);
-      font-weight: 600;
     }
-    tr:last-child td { border-bottom: 0; }
+    .tile-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+    .tile-item {
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      padding: 7px 8px;
+      background: color-mix(in srgb, var(--surface) 94%, var(--accent-soft));
+      min-width: 0;
+    }
+    .tile-item b {
+      display: block;
+      color: var(--muted);
+      font-size: .68rem;
+      margin-bottom: 3px;
+      font-weight: 600;
+      letter-spacing: .01em;
+    }
+    .tile-item span {
+      display: block;
+      font-size: .85rem;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    @keyframes reveal {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
 
     .pager {
       margin-top: 10px;
@@ -1194,7 +1249,10 @@ DEMO_HTML = """<!doctype html>
     @media (min-width: 860px) {
       .content { padding: 16px; }
       .topbar { border-radius: 0 0 12px 12px; }
-      .table-wrap { max-height: 56vh; }
+      .records-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+    @media (max-width: 620px) {
+      .tile-grid { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -1203,29 +1261,30 @@ DEMO_HTML = """<!doctype html>
     <header class="topbar">
       <div class="topbar-row">
         <div class="brand"><iconify-icon icon="solar:shield-user-outline"></iconify-icon> Aadhaar Scanner</div>
-        <button id="menuBtn" class="icon-btn" aria-label="Menu"><iconify-icon icon="solar:hamburger-menu-outline"></iconify-icon></button>
+        <button id="menuBtn" class="icon-btn" aria-label="Settings"><iconify-icon icon="solar:settings-outline"></iconify-icon></button>
       </div>
       <div class="whoami" id="whoami">Authenticating...</div>
     </header>
 
     <main class="content">
       <section id="tab-history" class="tab-panel active">
+        <div class="hero">
+          <img id="userAvatar" class="hero-avatar" alt="User avatar" />
+          <h2 id="heroName" class="hero-name">Aadhaar Scanner</h2>
+          <p id="heroMeta" class="hero-meta">Secure OCR parsing assistant</p>
+        </div>
         <div class="card">
           <div class="card-head">
             <h2 class="title"><iconify-icon icon="solar:history-outline"></iconify-icon> My Parsed Records</h2>
             <span class="badge" id="myCount">0 records</span>
           </div>
+          <div class="controls">
+            <input id="mySearch" class="input" placeholder="Search your parsed responses" />
+          </div>
           <div id="myLoading" style="display:none">
             <div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div>
           </div>
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr><th><iconify-icon icon="solar:calendar-outline"></iconify-icon> Created At</th><th><iconify-icon icon="solar:user-outline"></iconify-icon> Name</th><th><iconify-icon icon="solar:calendar-date-outline"></iconify-icon> DOB</th><th><iconify-icon icon="solar:card-outline"></iconify-icon> UID</th><th><iconify-icon icon="solar:shield-check-outline"></iconify-icon> Gender</th><th><iconify-icon icon="solar:widget-3-outline"></iconify-icon> Source</th></tr>
-              </thead>
-              <tbody id="myRows"></tbody>
-            </table>
-          </div>
+          <div id="myRows" class="records-grid"></div>
           <div class="pager">
             <span class="muted" id="myPageInfo">Page 1</span>
             <div class="group">
@@ -1267,14 +1326,7 @@ DEMO_HTML = """<!doctype html>
             <button id="searchBtn" class="btn primary"><iconify-icon icon="solar:magnifer-outline"></iconify-icon> Search</button>
             <button id="clearSearchBtn" class="btn"><iconify-icon icon="solar:close-circle-outline"></iconify-icon> Clear</button>
           </div>
-          <div class="table-wrap" style="margin-top:10px">
-            <table>
-              <thead>
-                <tr><th><iconify-icon icon="solar:calendar-outline"></iconify-icon> Created At</th><th><iconify-icon icon="solar:user-id-outline"></iconify-icon> User ID</th><th><iconify-icon icon="solar:user-outline"></iconify-icon> Username</th><th><iconify-icon icon="solar:user-outline"></iconify-icon> Name</th><th><iconify-icon icon="solar:calendar-date-outline"></iconify-icon> DOB</th><th><iconify-icon icon="solar:card-outline"></iconify-icon> UID</th><th><iconify-icon icon="solar:shield-check-outline"></iconify-icon> Gender</th></tr>
-              </thead>
-              <tbody id="adminRows"></tbody>
-            </table>
-          </div>
+          <div id="adminRows" class="records-grid"></div>
           <div class="pager">
             <span class="muted" id="adminPageInfo">Page 1</span>
             <div class="group">
@@ -1326,6 +1378,7 @@ const adminLimit = 20;
 let adminOffset = 0;
 let adminKeyword = '';
 let isAdmin = false;
+let myCachedRows = [];
 
 function formatTimestamp(v, withTime = true) {
   if (!v) return '';
@@ -1353,26 +1406,29 @@ function setPageInfo(elId, offset, limit) {
 }
 
 function myRowHtml(r) {
-  return `<tr>
-    <td>${formatTimestamp(r.created_at, true)}</td>
-    <td>${r.name || ''}</td>
-    <td>${r.dob || ''}</td>
-    <td>${r.uid || ''}</td>
-    <td>${r.gender || ''}</td>
-    <td>${r.source || ''}</td>
-  </tr>`;
+  return `<article class="record-tile">
+    <div class="tile-top"><span><iconify-icon icon="solar:calendar-outline"></iconify-icon> ${formatTimestamp(r.created_at, true)}</span><span>${r.source || '-'}</span></div>
+    <div class="tile-grid">
+      <div class="tile-item"><b>Name</b><span>${r.name || '-'}</span></div>
+      <div class="tile-item"><b>DOB</b><span>${r.dob || '-'}</span></div>
+      <div class="tile-item"><b>UID</b><span>${r.uid || '-'}</span></div>
+      <div class="tile-item"><b>Gender</b><span>${r.gender || '-'}</span></div>
+    </div>
+  </article>`;
 }
 
 function adminRowHtml(r) {
-  return `<tr>
-    <td>${formatTimestamp(r.created_at, true)}</td>
-    <td>${r.telegram_user_id || ''}</td>
-    <td>${r.telegram_username || ''}</td>
-    <td>${r.name || ''}</td>
-    <td>${r.dob || ''}</td>
-    <td>${r.uid || ''}</td>
-    <td>${r.gender || ''}</td>
-  </tr>`;
+  return `<article class="record-tile">
+    <div class="tile-top"><span><iconify-icon icon="solar:calendar-outline"></iconify-icon> ${formatTimestamp(r.created_at, true)}</span><span><iconify-icon icon="solar:user-id-outline"></iconify-icon> ${r.telegram_user_id || '-'}</span></div>
+    <div class="tile-grid">
+      <div class="tile-item"><b>Username</b><span>${r.telegram_username || '-'}</span></div>
+      <div class="tile-item"><b>Name</b><span>${r.name || '-'}</span></div>
+      <div class="tile-item"><b>DOB</b><span>${r.dob || '-'}</span></div>
+      <div class="tile-item"><b>UID</b><span>${r.uid || '-'}</span></div>
+      <div class="tile-item"><b>Gender</b><span>${r.gender || '-'}</span></div>
+      <div class="tile-item"><b>Source</b><span>${r.source || '-'}</span></div>
+    </div>
+  </article>`;
 }
 
 function switchTab(tab) {
@@ -1389,14 +1445,24 @@ async function loadMine() {
   document.getElementById('myLoading').style.display = 'none';
   if (!res.ok) throw new Error(data?.detail?.message || 'Failed to load records');
 
-  const rows = data.records || [];
+  myCachedRows = data.records || [];
+  const q = (document.getElementById('mySearch').value || '').trim().toLowerCase();
+  const filtered = q ? myCachedRows.filter(r => [r.name, r.dob, r.uid, r.gender, r.source].some(v => String(v || '').toLowerCase().includes(q))) : myCachedRows;
   isAdmin = !!data.is_admin;
-  document.getElementById('myRows').innerHTML = rows.map(myRowHtml).join('') || '<tr><td colspan="6">No records</td></tr>';
-  document.getElementById('myCount').textContent = `${rows.length} records`;
+  document.getElementById('myRows').innerHTML = filtered.map(myRowHtml).join('') || '<div class="tile-item"><b>Status</b><span>No records found</span></div>';
+  document.getElementById('myCount').textContent = `${filtered.length} records`;
   document.getElementById('myPrev').disabled = myOffset === 0;
-  document.getElementById('myNext').disabled = rows.length < myLimit;
+  document.getElementById('myNext').disabled = myCachedRows.length < myLimit;
   setPageInfo('myPageInfo', myOffset, myLimit);
 
+  const user = tg?.initDataUnsafe?.user || {};
+  const fullName = [user.first_name, user.last_name].filter(Boolean).join(' ').trim() || 'Telegram User';
+  const username = user.username ? '@' + user.username : '@unknown';
+  const userId = user.id ? String(user.id) : 'N/A';
+  const avatar = user.photo_url || `https://ui-avatars.com/api/?background=1a2b3e&color=edf4fb&name=${encodeURIComponent(fullName)}`;
+  document.getElementById('userAvatar').src = avatar;
+  document.getElementById('heroName').textContent = fullName;
+  document.getElementById('heroMeta').textContent = `${username} • ID ${userId}`;
   whoami.textContent = `Authenticated. Admin: ${isAdmin ? 'Yes' : 'No'}`;
   document.getElementById('adminCard').style.display = isAdmin ? 'block' : 'none';
   document.getElementById('adminLocked').style.display = isAdmin ? 'none' : 'block';
@@ -1410,12 +1476,12 @@ async function loadAdmin() {
   const data = await res.json();
   const tbody = document.getElementById('adminRows');
   if (!res.ok) {
-    tbody.innerHTML = `<tr><td colspan="7">${data?.detail?.message || 'Search failed'}</td></tr>`;
+    tbody.innerHTML = `<div class="tile-item"><b>Error</b><span>${data?.detail?.message || 'Search failed'}</span></div>`;
     document.getElementById('adminCount').textContent = '0 results';
     return;
   }
   const rows = data.records || [];
-  tbody.innerHTML = rows.map(adminRowHtml).join('') || '<tr><td colspan="7">No results</td></tr>';
+  tbody.innerHTML = rows.map(adminRowHtml).join('') || '<div class="tile-item"><b>Status</b><span>No results found</span></div>';
   document.getElementById('adminCount').textContent = `${rows.length} results`;
   document.getElementById('adminPrev').disabled = adminOffset === 0;
   document.getElementById('adminNext').disabled = rows.length < adminLimit;
@@ -1515,6 +1581,13 @@ function setupInteractions() {
       }
       switchTab(tab);
     });
+  });
+
+  document.getElementById('mySearch').addEventListener('input', async () => {
+    const q = (document.getElementById('mySearch').value || '').trim().toLowerCase();
+    const filtered = q ? myCachedRows.filter(r => [r.name, r.dob, r.uid, r.gender, r.source].some(v => String(v || '').toLowerCase().includes(q))) : myCachedRows;
+    document.getElementById('myRows').innerHTML = filtered.map(myRowHtml).join('') || '<div class="tile-item"><b>Status</b><span>No records found</span></div>';
+    document.getElementById('myCount').textContent = `${filtered.length} records`;
   });
 }
 
