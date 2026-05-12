@@ -1189,14 +1189,14 @@ DEMO_HTML = """<!doctype html>
   <script src="https://code.iconify.design/iconify-icon/1.0.8/iconify-icon.min.js"></script>
   <style>
     :root {
-      --bg: #0f1824;
-      --surface: #132131;
-      --surface-2: #1a2b3e;
-      --ink: #edf4fb;
-      --muted: #8ea3b8;
-      --line: #26384c;
-      --accent: #39a6ff;
-      --accent-soft: #1c3147;
+      --bg: #101922;
+      --surface: #172433;
+      --surface-2: #1f3146;
+      --ink: #e8f1fa;
+      --muted: #9fb0c2;
+      --line: #2c4058;
+      --accent: #4fb2ff;
+      --accent-soft: #23384f;
       --success: #2f7d53;
       --danger: #a44747;
       --radius: 14px;
@@ -1586,7 +1586,7 @@ DEMO_HTML = """<!doctype html>
     .bottom-wrap {
       width: min(920px, 100%);
       display: grid;
-      grid-template-columns: repeat(3, 1fr);
+      grid-template-columns: repeat(4, 1fr);
       gap: 8px;
       padding: 8px 12px;
     }
@@ -1729,6 +1729,54 @@ DEMO_HTML = """<!doctype html>
           <div class="whoami" style="margin-top:8px">This tab is available only to configured admin users.</div>
         </div>
       </section>
+
+      <section id="tab-settings" class="tab-panel">
+        <div class="card">
+          <div class="card-head">
+            <h2 class="title"><iconify-icon icon="solar:settings-outline"></iconify-icon> Theme & Customization</h2>
+          </div>
+          <div class="controls">
+            <button class="btn" data-theme-btn="default">Default</button>
+            <button class="btn" data-theme-btn="warm">Warm</button>
+            <button class="btn" data-theme-btn="soft-dark">Soft Dark</button>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head">
+            <h2 class="title"><iconify-icon icon="solar:arrow-right-up-outline"></iconify-icon> Forwarding</h2>
+          </div>
+          <div class="form-grid">
+            <label><input type="checkbox" id="fwEnabled" /> Enable forwarding on new parse</label>
+            <select id="fwMethod" class="input"><option>POST</option><option>PUT</option><option>PATCH</option></select>
+            <input id="fwUrl" class="input" placeholder="https://example.com/webhook" />
+            <textarea id="fwHeaders" class="input" rows="3" placeholder='{"Authorization":"Bearer ..."}'></textarea>
+            <textarea id="fwBody" class="input" rows="4" placeholder='{"uid":"%uid%","name":"%name%"}'></textarea>
+            <label><input type="checkbox" id="fwDetailed" /> Show detailed errors</label>
+            <div class="controls">
+              <button class="btn primary" id="fwSaveBtn">Save</button>
+              <button class="btn" id="fwTestBtn">Test</button>
+            </div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head">
+            <h2 class="title"><iconify-icon icon="solar:database-outline"></iconify-icon> Data Management</h2>
+          </div>
+          <div class="form-grid">
+            <input id="mRecordId" class="input" placeholder="Record ID (for edit/delete)" />
+            <input id="mUid" class="input" placeholder="UID (12 digits)" />
+            <input id="mName" class="input" placeholder="Name" />
+            <input id="mDob" class="input" placeholder="DOB DD/MM/YYYY" />
+            <select id="mGender" class="input"><option>Male</option><option>Female</option><option>Other</option></select>
+            <select id="mSource" class="input"><option>manual</option><option>api</option><option>webhook</option></select>
+            <div class="controls">
+              <button class="btn primary" id="mInsertBtn">Insert</button>
+              <button class="btn" id="mUpdateBtn">Update</button>
+              <button class="btn" id="mDeleteBtn">Delete</button>
+            </div>
+          </div>
+        </div>
+      </section>
     </main>
 
     <nav class="bottom-nav">
@@ -1736,64 +1784,15 @@ DEMO_HTML = """<!doctype html>
         <button class="tab-btn active" data-tab="history"><iconify-icon icon="solar:history-outline"></iconify-icon> History</button>
         <button class="tab-btn" data-tab="upload"><iconify-icon icon="solar:upload-minimalistic-outline"></iconify-icon> Demo</button>
         <button class="tab-btn" data-tab="admin"><iconify-icon icon="solar:magnifer-outline"></iconify-icon> Admin</button>
+        <button class="tab-btn" data-tab="settings"><iconify-icon icon="solar:settings-outline"></iconify-icon> Settings</button>
       </div>
     </nav>
   </div>
 
   <div id="popup" class="popup" aria-hidden="true">
     <div class="popup-menu" role="menu">
-      <button class="menu-item" data-submenu="theme"><iconify-icon icon="solar:palette-round-outline"></iconify-icon> Theme & Customization</button>
-      <button class="menu-item" data-submenu="forwarding"><iconify-icon icon="solar:arrow-right-up-outline"></iconify-icon> Forwarding</button>
-      <button class="menu-item" data-submenu="errors"><iconify-icon icon="solar:danger-triangle-outline"></iconify-icon> Error Handling</button>
-      <button class="menu-item" data-submenu="data"><iconify-icon icon="solar:database-outline"></iconify-icon> Data Management</button>
+      <button class="menu-item" id="openSettingsPage"><iconify-icon icon="solar:settings-outline"></iconify-icon> Open Settings</button>
       <button class="menu-item" id="refreshAll"><iconify-icon icon="solar:refresh-outline"></iconify-icon> Refresh Data</button>
-
-      <div id="submenu-theme" class="submenu">
-        <p class="menu-title">Theme & Customization</p>
-        <div class="controls">
-          <button class="menu-item" data-theme-btn="default">Default</button>
-          <button class="menu-item" data-theme-btn="warm">Warm</button>
-          <button class="menu-item" data-theme-btn="soft-dark">Soft Dark</button>
-        </div>
-      </div>
-
-      <div id="submenu-forwarding" class="submenu">
-        <p class="menu-title">Forwarding Settings</p>
-        <div class="form-grid">
-          <label><input type="checkbox" id="fwEnabled" /> Enable forwarding on new parse</label>
-          <select id="fwMethod" class="input"><option>POST</option><option>PUT</option><option>PATCH</option></select>
-          <input id="fwUrl" class="input" placeholder="https://example.com/webhook" />
-          <textarea id="fwHeaders" class="input" rows="3" placeholder='{"Authorization":"Bearer ..."}'></textarea>
-          <textarea id="fwBody" class="input" rows="4" placeholder='{"uid":"%uid%","name":"%name%"}'></textarea>
-          <label><input type="checkbox" id="fwDetailed" /> Show detailed errors</label>
-          <div class="controls">
-            <button class="btn primary" id="fwSaveBtn">Save</button>
-            <button class="btn" id="fwTestBtn">Test</button>
-          </div>
-        </div>
-      </div>
-
-      <div id="submenu-errors" class="submenu">
-        <p class="menu-title">Error Handling</p>
-        <div class="whoami">Forward failures are non-blocking. Parse records are saved even if forwarding fails.</div>
-      </div>
-
-      <div id="submenu-data" class="submenu">
-        <p class="menu-title">Insert / Edit / Delete Record</p>
-        <div class="form-grid">
-          <input id="mRecordId" class="input" placeholder="Record ID (for edit/delete)" />
-          <input id="mUid" class="input" placeholder="UID (12 digits)" />
-          <input id="mName" class="input" placeholder="Name" />
-          <input id="mDob" class="input" placeholder="DOB DD/MM/YYYY" />
-          <select id="mGender" class="input"><option>Male</option><option>Female</option><option>Other</option></select>
-          <select id="mSource" class="input"><option>manual</option><option>api</option><option>webhook</option></select>
-          <div class="controls">
-            <button class="btn primary" id="mInsertBtn">Insert</button>
-            <button class="btn" id="mUpdateBtn">Update</button>
-            <button class="btn" id="mDeleteBtn">Delete</button>
-          </div>
-        </div>
-      </div>
     </div>
   </div>
   <div id="toast" class="toast"></div>
@@ -1819,6 +1818,21 @@ let adminOffset = 0;
 let adminKeyword = '';
 let isAdmin = false;
 let myCachedRows = [];
+
+async function readResponse(res) {
+  const raw = await res.text();
+  let data = null;
+  if (raw) {
+    try { data = JSON.parse(raw); } catch { data = { raw }; }
+  }
+  if (!res.ok) {
+    const msg = data?.detail?.message || data?.message || `Request failed (${res.status})`;
+    const err = new Error(msg);
+    err.status = res.status;
+    throw err;
+  }
+  return data || {};
+}
 
 function toast(text) {
   toastEl.textContent = text;
@@ -1892,9 +1906,8 @@ function renderMine() {
 async function loadMine() {
   document.getElementById('myLoading').style.display = 'block';
   const res = await fetch(`/api/me/parses?limit=${myLimit}&offset=${myOffset}`, { headers: parseAuthHeader });
-  const data = await res.json();
+  const data = await readResponse(res);
   document.getElementById('myLoading').style.display = 'none';
-  if (!res.ok) throw new Error(data?.detail?.message || 'Failed to load records');
   myCachedRows = data.records || [];
   isAdmin = !!data.is_admin;
   renderMine();
@@ -1909,14 +1922,15 @@ async function loadMine() {
   whoami.textContent = `Authenticated. Admin: ${isAdmin ? 'Yes' : 'No'}`;
   document.getElementById('adminCard').style.display = isAdmin ? 'block' : 'none';
   document.getElementById('adminLocked').style.display = isAdmin ? 'none' : 'block';
-  if (isAdmin) await loadAdmin();
+  if (isAdmin) {
+    try { await loadAdmin(); } catch (e) { toast(`Admin load failed: ${e.message}`); }
+  }
 }
 async function loadAdmin() {
   if (!isAdmin) return;
   const res = await fetch(`/api/admin/search?keyword=${encodeURIComponent(adminKeyword)}&limit=${adminLimit}&offset=${adminOffset}`, { headers: parseAuthHeader });
-  const data = await res.json();
+  const data = await readResponse(res);
   const target = document.getElementById('adminRows');
-  if (!res.ok) { target.innerHTML = `<div class="tile-item"><b>Error</b><span>${data?.detail?.message || 'Search failed'}</span></div>`; return; }
   const rows = data.records || [];
   window.__adminRows = rows;
   target.innerHTML = rows.map(r => tileHtml(r, true)).join('') || '<div class="tile-item"><b>Status</b><span>No results found</span></div>';
@@ -1933,9 +1947,8 @@ async function parseNow() {
   const fd = new FormData(); fd.append('file', f);
   try {
     const res = await fetch('/api/parse', { method: 'POST', headers: parseAuthHeader, body: fd });
-    const data = await res.json();
+    const data = await readResponse(res);
     parseResult.textContent = JSON.stringify(data, null, 2);
-    if (!res.ok) throw new Error(data?.detail?.message || 'Parse failed');
     setStatus(parseStatus, 'Parsed successfully', true);
     myOffset = 0; await loadMine(); switchTab('history');
   } catch (e) { setStatus(parseStatus, e.message, false); }
@@ -1951,14 +1964,12 @@ async function saveForwardingConfig() {
     show_detailed_errors: document.getElementById('fwDetailed').checked
   };
   const res = await fetch('/api/me/forwarding-config', { method: 'PUT', headers: authHeader, body: JSON.stringify(payload) });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data?.detail?.message || 'Save failed');
+  await readResponse(res);
   toast('Forwarding config saved');
 }
 async function loadForwardingConfig() {
   const res = await fetch('/api/me/forwarding-config', { headers: parseAuthHeader });
-  const data = await res.json();
-  if (!res.ok) return;
+  const data = await readResponse(res);
   const c = data.config || {};
   document.getElementById('fwEnabled').checked = !!c.enabled;
   document.getElementById('fwMethod').value = c.method || 'POST';
@@ -1976,8 +1987,7 @@ async function forwardingTest() {
     source: document.getElementById('mSource').value || 'manual'
   };
   const res = await fetch('/api/me/forwarding-test', { method: 'POST', headers: authHeader, body: JSON.stringify(payload) });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data?.detail?.message || 'Forwarding test failed');
+  const data = await readResponse(res);
   toast(`Forwarding test: ${data.forwarding?.status || 'ok'}`);
 }
 function mutationPayload() {
@@ -1991,23 +2001,20 @@ function mutationPayload() {
 }
 async function insertRecord() {
   const res = await fetch('/api/me/parses', { method: 'POST', headers: authHeader, body: JSON.stringify(mutationPayload()) });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data?.detail?.message || 'Insert failed');
+  await readResponse(res);
   toast('Record inserted'); await loadMine(); if (isAdmin) await loadAdmin();
 }
 async function updateRecord() {
   const id = Number(document.getElementById('mRecordId').value || 0); if (!id) throw new Error('Record ID required');
   const res = await fetch(`/api/me/parses/${id}`, { method: 'PATCH', headers: authHeader, body: JSON.stringify(mutationPayload()) });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data?.detail?.message || 'Update failed');
+  await readResponse(res);
   toast('Record updated'); await loadMine(); if (isAdmin) await loadAdmin();
 }
 async function deleteRecord() {
   const id = Number(document.getElementById('mRecordId').value || 0); if (!id) throw new Error('Record ID required');
   if (!confirm('Delete this record?')) return;
   const res = await fetch(`/api/me/parses/${id}`, { method: 'DELETE', headers: parseAuthHeader });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data?.detail?.message || 'Delete failed');
+  await readResponse(res);
   toast('Record deleted'); await loadMine(); if (isAdmin) await loadAdmin();
 }
 function togglePopup(force) {
@@ -2027,12 +2034,8 @@ function setupInteractions() {
   document.getElementById('mySearch').addEventListener('input', renderMine);
   document.getElementById('menuBtn').onclick = () => togglePopup();
   document.getElementById('popup').addEventListener('click', (e) => { if (e.target.id === 'popup') togglePopup(false); });
+  document.getElementById('openSettingsPage').onclick = () => { togglePopup(false); switchTab('settings'); };
   document.querySelectorAll('[data-theme-btn]').forEach(btn => btn.onclick = () => { document.body.setAttribute('data-theme', btn.getAttribute('data-theme-btn')); });
-  document.querySelectorAll('[data-submenu]').forEach(btn => btn.onclick = () => {
-    const key = btn.getAttribute('data-submenu');
-    document.querySelectorAll('.submenu').forEach(s => s.classList.remove('open'));
-    document.getElementById(`submenu-${key}`).classList.add('open');
-  });
   document.getElementById('refreshAll').onclick = async () => { togglePopup(false); await loadMine(); };
   document.getElementById('fwSaveBtn').onclick = async () => { try { await saveForwardingConfig(); } catch (e) { toast(e.message); } };
   document.getElementById('fwTestBtn').onclick = async () => { try { await forwardingTest(); } catch (e) { toast(e.message); } };
@@ -2045,7 +2048,11 @@ setupInteractions();
 switchTab('history');
 setStatus(parseStatus, 'Idle', true);
 loadForwardingConfig().catch(() => {});
-loadMine().catch(err => { whoami.textContent = `Auth failed: ${err.message}`; whoami.classList.add('bad'); });
+loadMine().catch(err => {
+  const msg = err?.status === 401 || err?.status === 403 ? `Authentication failed: ${err.message}` : `Unable to load data: ${err.message}`;
+  whoami.textContent = msg;
+  whoami.classList.add('bad');
+});
 </script>
 </body>
 </html>"""
