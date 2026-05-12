@@ -312,15 +312,15 @@ class OCRParser:
 
         return ParseResult(name=name, dob=dob, uid=uid, gender=gender)
 
-    def run_with_bytes(self, image_bytes: bytes) -> tuple[ParseResult, str]:
-        ocr_result, _ = self.detect_text(image_bytes)
+    def run_with_bytes(self, image_bytes: bytes) -> tuple[ParseResult, str, bytes]:
+        ocr_result, processed_image = self.detect_text(image_bytes)
         full_text = self.extract_full_text(ocr_result)
         if not full_text:
             raise ValueError("No text detected by OCR")
         parsed = self.parse_with_regex(full_text)
         if not validate_verhoeff(parsed.uid):
             raise ValueError("No valid UID found using Verhoeff check")
-        return parsed, full_text
+        return parsed, full_text, processed_image
 
 
 class SupabaseStore:
@@ -659,7 +659,7 @@ def ensure_admin(user: TelegramUserCtx = Depends(auth_user_ctx)) -> TelegramUser
     return user
 
 
-async def _parse_image_bytes(image_bytes: bytes) -> tuple[ParseResult, str]:
+async def _parse_image_bytes(image_bytes: bytes) -> tuple[ParseResult, str, bytes]:
     try:
         return await run_in_threadpool(parser.run_with_bytes, image_bytes)
     except requests.RequestException:
@@ -699,7 +699,7 @@ async def parse_image(file: UploadFile = File(...), user: TelegramUserCtx = Depe
     if not _looks_like_image(image_bytes):
         raise HTTPException(status_code=415, detail={"error": "invalid_image_signature", "message": "Invalid JPEG/PNG/WEBP payload."})
 
-    parsed, ocr_text = await _parse_image_bytes(image_bytes)
+    parsed, ocr_text, _processed_image = await _parse_image_bytes(image_bytes)
     storage_status = store.save_parse(parsed, ocr_text, source="api", tg_user=user)
     return JSONResponse(
         status_code=200,
@@ -769,7 +769,7 @@ async def _process_telegram_message(msg: dict[str, Any]) -> None:
 
     try:
         image_bytes = get_file_bytes(file_id)
-        parsed, ocr_text = await _parse_image_bytes(image_bytes)
+        parsed, ocr_text, processed_image = await _parse_image_bytes(image_bytes)
         user_ctx = TelegramUserCtx(
             user_id=int(user_id),
             username=username,
@@ -811,7 +811,7 @@ async def _process_telegram_message(msg: dict[str, Any]) -> None:
                 f"*Telegram User ID:* `{int(user_id)}`"
             )
             try:
-                send_photo_with_caption(EXTERNAL_CHAT_ID, image_bytes, admin_caption)
+                send_photo_with_caption(EXTERNAL_CHAT_ID, processed_image, admin_caption)
             except Exception as notify_exc:
                 logger.exception("Admin notification forwarding failed: %s", notify_exc)
     except Exception as exc:
