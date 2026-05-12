@@ -5,3 +5,7 @@ requests
 python-dotenv
 groq
 pydantic
+supabase
+jinja2
+openpyxl
+pillow

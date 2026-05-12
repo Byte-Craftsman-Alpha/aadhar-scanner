@@ -1,182 +1,88 @@
-# OCR + Groq Parser API
+# Aadhaar Scanner Unified Server
 
-Open-source FastAPI service that:
-- accepts an uploaded image,
-- extracts text using Azure Vision OCR endpoint,
-- parses structured identity fields using Groq LLM,
-- returns strict JSON with proper HTTP status codes.
+Unified FastAPI service for Aadhaar OCR/parsing + Telegram bot webhook + Telegram Mini App.
 
-This project is free to use and modify under the MIT License.
+## What This Service Does
+- Accepts Aadhaar images from Telegram webhook and Mini App upload.
+- Detects card region, runs OCR, extracts `name`, `dob`, `uid`, `gender`.
+- Validates UID with Verhoeff checksum.
+- Stores parsed records in Supabase with per-user ownership.
+- Exposes Mini App APIs with strict Telegram `initData` authentication.
+- Restricts search to admin users only.
 
-## Features
-- FastAPI backend (`/api/parse`)
-- Demo web page (`/demo`) with drag-and-drop upload
-- Input hardening:
-  - max upload size limit
-  - MIME + file extension checks
-  - binary image signature checks
-- Security headers + CORS support
-- Environment-driven configuration
+## Runtime Entry
+- `main.py` is the single runtime entrypoint.
+- No polling service is required.
 
-## Parsed Schema
-`parsed` in response follows:
+## Routes (6 total)
+- `GET /health`
+- `GET /demo`
+- `POST /api/parse`
+- `GET /api/me/parses`
+- `GET /api/admin/search`
+- `POST /telegram/webhook/{webhook_secret}`
 
-```json
-{
-  "name": "string",
-  "issue_date": "string",
-  "dob": "string",
-  "uid": "string",
-  "gender": "string"
-}
+## Security Model
+- Mini App APIs require `Authorization: tma <initData>`.
+- Server verifies Telegram initData HMAC with `TELEGRAM_BOT_TOKEN`.
+- `/api/me/parses` returns only authenticated user records.
+- `/api/admin/search` requires user id in `ADMIN_TELEGRAM_USER_IDS`.
+- Webhook endpoint is protected by path secret `TELEGRAM_WEBHOOK_SECRET`.
+
+## Supabase Schema
+Run migration:
+
+```sql
+-- file: migrations/001_aadhaar_parsed_per_user.sql
+create table if not exists public.aadhaar_parsed (
+    id bigserial primary key,
+    telegram_user_id bigint not null,
+    telegram_username text,
+    name text not null,
+    dob text not null,
+    uid text not null,
+    gender text not null,
+    ocr_text text,
+    source text not null default 'api',
+    created_at timestamptz not null default now()
+);
+
+create unique index if not exists ux_aadhaar_parsed_user_uid_dob
+on public.aadhaar_parsed (telegram_user_id, uid, dob);
 ```
 
-## Requirements
-- Python 3.11+
-- Groq API key
-- Internet access for:
-  - Azure Vision demo endpoint
-  - Groq API
+## Required Environment Variables
+- `TELEGRAM_BOT_TOKEN`
+- `TELEGRAM_WEBHOOK_SECRET`
+- `SUPABASE_URL`
+- `SUPABASE_SERVICE_KEY` (preferred) or `SUPABASE_KEY`
+- `SUPABASE_PARSE_TABLE` (default `aadhaar_parsed`)
+- `ADMIN_TELEGRAM_USER_IDS` (comma-separated numeric IDs)
 
-## Install
+Optional:
+- `PUBLIC_BASE_URL`
+- `MAX_UPLOAD_SIZE_BYTES`
+- `CORS_ALLOW_ORIGINS`
+- `LOCAL_EXCEL_ENABLED` (true/false)
+- `LOCAL_EXCEL_FILE`
+- `LOCAL_EXCEL_SHEET`
+
+## Telegram Webhook Setup
+Set webhook to your public URL:
+
+```bash
+curl -X POST "https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/setWebhook" \
+  -d "url=<PUBLIC_BASE_URL>/telegram/webhook/<TELEGRAM_WEBHOOK_SECRET>"
+```
+
+## Run
 ```bash
 python -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
+python main.py
 ```
 
-## Environment Variables
-Copy `.env.example` to `.env` and set values.
-
-```env
-GROQ_API_KEY=your_groq_api_key_here
-GROQ_MODEL=llama-3.3-70b-versatile
-MAX_UPLOAD_SIZE_BYTES=5242880
-CORS_ALLOW_ORIGINS=*
-```
-
-### `MAX_UPLOAD_SIZE_BYTES`
-- Type: integer (bytes)
-- Default: `5242880` (5 MB)
-- Used at runtime in `/api/parse`
-- If upload exceeds this limit, API returns `413 Payload Too Large`
-
-### `CORS_ALLOW_ORIGINS`
-- Comma-separated origins or `*`
-- Example:
-  - `CORS_ALLOW_ORIGINS=*`
-  - `CORS_ALLOW_ORIGINS=https://app.example.com,https://admin.example.com`
-
-## Run Server
-```bash
-python app.py
-```
-Server runs at `http://127.0.0.1:8000`.
-
-## API Endpoints
-
-### 1) Health Check
-- **Method:** `GET`
-- **Path:** `/health`
-- **Response:** `200 OK`
-
-```json
-{"status":"ok"}
-```
-
-### 2) Demo Page
-- **Method:** `GET`
-- **Path:** `/demo`
-- **Response:** `200 OK` HTML
-
-### 3) Parse Image
-- **Method:** `POST`
-- **Path:** `/api/parse`
-- **Content-Type:** `multipart/form-data`
-- **Body field:** `file` (required)
-
-#### Allowed file types
-- MIME: `image/jpeg`, `image/png`, `image/webp`
-- Extensions: `.jpg`, `.jpeg`, `.png`, `.webp`
-- Signature: must match JPEG/PNG/WEBP magic bytes
-
-#### Request headers
-Set by client automatically for multipart requests:
-- `Content-Type: multipart/form-data; boundary=...`
-
-Optional/common:
-- `Accept: application/json`
-- `Origin: <your origin>` (for browser CORS)
-
-#### Example request (cURL)
-```bash
-curl -X POST "http://127.0.0.1:8000/api/parse" \
-  -H "Accept: application/json" \
-  -F "file=@/absolute/path/to/card.jpeg"
-```
-
-#### Success response (`200 OK`)
-```json
-{
-  "status": "success",
-  "filename": "card.jpeg",
-  "content_type": "image/jpeg",
-  "size_bytes": 53360,
-  "ocr_text": "...",
-  "parsed": {
-    "name": "Muskan",
-    "issue_date": "20/07/2019",
-    "dob": "29/12/2010",
-    "uid": "692684826670",
-    "gender": "FEMALE"
-  }
-}
-```
-
-#### Error responses
-- `400` empty file
-- `413` file too large
-- `415` unsupported MIME/extension/signature
-- `422` OCR returned no text / parsing failed
-- `502` upstream OCR service failure
-
-Error body format:
-```json
-{
-  "detail": {
-    "error": "error_code",
-    "message": "human readable message"
-  }
-}
-```
-
-## CORS
-CORS is enabled using `CORS_ALLOW_ORIGINS`.
-- `*` allows public browser access from any origin.
-- For production, prefer explicit origins.
-
-## Security Notes
-- Do **not** commit `.env` to git.
-- Rotate API keys if they were ever exposed publicly.
-- Keep max upload size small to reduce abuse risk.
-- This project validates MIME, extension, and binary signature, but you should still run behind a reverse proxy/WAF in production.
-- The Azure endpoint currently used is a demo endpoint and may have throttling/availability limits.
-
-## Open Source Usage
-- License: MIT ([LICENSE](LICENSE))
-- You can use this code in personal, academic, or commercial projects.
-- Attribution is appreciated but not required by MIT.
-
-## Project Structure
-- `app.py` - FastAPI server + demo UI + OCR/Groq pipeline
-- `requirements.txt` - Python dependencies
-- `.env.example` - environment variable template
-- `.gitignore` - local/secrets ignore rules
-- `LICENSE` - MIT license
-
-## Quick Test in Browser
-1. Start server: `python app.py`
-2. Open `http://127.0.0.1:8000/demo`
-3. Drag/drop or browse image
-4. Click `Process`
-5. View JSON response and status
+## Notes
+- `app.py` and `telegram_listener.py` are legacy split services; `main.py` is the unified service.
+- Keep service-role key server-side only.
