@@ -20,7 +20,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from PIL import Image, ImageOps
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from openpyxl import Workbook, load_workbook
 
 try:
@@ -54,6 +54,8 @@ SUPABASE_KEY = (
     or os.getenv("SUPABASE_KEY", "").strip()
 )
 SUPABASE_PARSE_TABLE = os.getenv("SUPABASE_PARSE_TABLE", "aadhaar_parsed").strip()
+SUPABASE_FORWARD_CONFIG_TABLE = os.getenv("SUPABASE_FORWARD_CONFIG_TABLE", "aadhaar_forward_configs").strip()
+SUPABASE_FORWARD_LOG_TABLE = os.getenv("SUPABASE_FORWARD_LOG_TABLE", "aadhaar_forward_logs").strip()
 LOCAL_EXCEL_ENABLED = os.getenv("LOCAL_EXCEL_ENABLED", "false").strip().lower() == "true"
 LOCAL_EXCEL_FILE = os.getenv("LOCAL_EXCEL_FILE", "aadhaar_parsed.xlsx").strip()
 LOCAL_EXCEL_SHEET = os.getenv("LOCAL_EXCEL_SHEET", "aadhaar_parsed").strip()
@@ -82,6 +84,23 @@ class ParseListResponse(BaseModel):
     total: int
     is_admin: bool
     records: list[dict[str, Any]]
+
+
+class ForwardingConfigInput(BaseModel):
+    enabled: bool = False
+    method: str = "POST"
+    endpoint_url: str = ""
+    headers_json: dict[str, Any] = Field(default_factory=dict)
+    body_template_json: dict[str, Any] = Field(default_factory=dict)
+    show_detailed_errors: bool = False
+
+
+class ParseMutationInput(BaseModel):
+    name: str
+    dob: str
+    uid: str
+    gender: str
+    source: str = "manual"
 
 
 @dataclass
@@ -140,6 +159,79 @@ def extract_valid_uid_from_text(text: str) -> str:
         if validate_verhoeff(candidate):
             return candidate
     return ""
+
+
+def normalize_gender(value: str) -> str:
+    token = (value or "").strip().upper()
+    if token in {"MALE", "M"}:
+        return "Male"
+    if token in {"FEMALE", "F"}:
+        return "Female"
+    if token in {"OTHER", "O"}:
+        return "Other"
+    raise ValueError("gender must be MALE/FEMALE/OTHER")
+
+
+def validate_dob(value: str) -> str:
+    raw = (value or "").strip()
+    if not re.fullmatch(r"\d{2}/\d{2}/\d{4}", raw):
+        raise ValueError("dob must be in DD/MM/YYYY format")
+    try:
+        datetime.strptime(raw, "%d/%m/%Y")
+    except Exception as exc:
+        raise ValueError("dob is invalid") from exc
+    return raw
+
+
+def validate_source(value: str) -> str:
+    allowed = {"api", "webhook", "manual"}
+    token = (value or "").strip().lower()
+    if token not in allowed:
+        raise ValueError("source must be one of: api, webhook, manual")
+    return token
+
+
+def validated_parse_payload(inp: ParseMutationInput) -> dict[str, str]:
+    name = " ".join((inp.name or "").strip().split())
+    if not name:
+        raise ValueError("name is required")
+    uid = re.sub(r"\D", "", inp.uid or "")
+    if not validate_verhoeff(uid):
+        raise ValueError("uid must be a valid 12-digit Aadhaar with Verhoeff check")
+    return {
+        "name": name,
+        "dob": validate_dob(inp.dob),
+        "uid": uid,
+        "gender": normalize_gender(inp.gender),
+        "source": validate_source(inp.source),
+    }
+
+
+def _token_context(record: dict[str, Any]) -> dict[str, str]:
+    return {
+        "uid": str(record.get("uid", "")),
+        "name": str(record.get("name", "")),
+        "dob": str(record.get("dob", "")),
+        "gender": str(record.get("gender", "")),
+        "source": str(record.get("source", "")),
+        "created_at": str(record.get("created_at", "")),
+        "telegram_user_id": str(record.get("telegram_user_id", "")),
+        "telegram_username": str(record.get("telegram_username", "")),
+        "record_id": str(record.get("id", "")),
+    }
+
+
+def _render_tokens(value: Any, ctx: dict[str, str]) -> Any:
+    if isinstance(value, str):
+        out = value
+        for key, v in ctx.items():
+            out = out.replace(f"%{key}%", v)
+        return out
+    if isinstance(value, list):
+        return [_render_tokens(item, ctx) for item in value]
+    if isinstance(value, dict):
+        return {k: _render_tokens(v, ctx) for k, v in value.items()}
+    return value
 
 
 def _extension(filename: str | None) -> str:
@@ -327,6 +419,8 @@ class SupabaseStore:
     def __init__(self) -> None:
         self.client = self._init_client()
         self.table = SUPABASE_PARSE_TABLE
+        self.forward_config_table = SUPABASE_FORWARD_CONFIG_TABLE
+        self.forward_log_table = SUPABASE_FORWARD_LOG_TABLE
         self.ready = self._validate_table()
 
     def _init_client(self):
@@ -350,13 +444,13 @@ class SupabaseStore:
             logger.error("Supabase table '%s' is not reachable: %s", self.table, exc)
             return False
 
-    def save_parse(self, parsed: ParseResult, ocr_text: str, source: str, tg_user: TelegramUserCtx | None) -> str:
+    def save_parse(self, parsed: ParseResult, ocr_text: str, source: str, tg_user: TelegramUserCtx | None) -> dict[str, Any]:
         if self.client is None:
-            return "failed: supabase_not_configured"
+            return {"status": "failed: supabase_not_configured"}
         if not self.ready:
-            return "failed: parse_table_not_ready"
+            return {"status": "failed: parse_table_not_ready"}
         if tg_user is None:
-            return "failed: user_context_required"
+            return {"status": "failed: user_context_required"}
 
         payload = {
             "telegram_user_id": tg_user.user_id,
@@ -372,19 +466,20 @@ class SupabaseStore:
         missing = [k for k in ("name", "dob", "uid", "gender") if not str(payload.get(k, "")).strip()]
         if missing:
             logger.error("Supabase save skipped: missing required fields: %s", ",".join(missing))
-            return f"failed: required_field_missing:{','.join(missing)}"
+            return {"status": f"failed: required_field_missing:{','.join(missing)}"}
 
         try:
-            self.client.table(self.table).insert(payload).execute()
-            return "saved"
+            result = self.client.table(self.table).insert(payload).execute()
+            row = ((result.data or [{}])[0]) if hasattr(result, "data") else {}
+            return {"status": "saved", "record": row or payload}
         except Exception as exc:
             logger.exception("Supabase save failed (user=%s uid=%s): %s", tg_user.user_id, payload["uid"], exc)
-            return f"failed: {exc}"
+            return {"status": f"failed: {exc}"}
 
     def list_user_parses(self, user_id: int, limit: int, offset: int) -> list[dict[str, Any]]:
         result = (
             self.client.table(self.table)
-            .select("id,telegram_user_id,telegram_username,name,dob,uid,gender,source,created_at")
+            .select("id,telegram_user_id,telegram_username,name,dob,uid,gender,source,created_at,forward_status,forwarded_at,forward_error")
             .eq("telegram_user_id", user_id)
             .order("created_at", desc=True)
             .range(offset, offset + limit - 1)
@@ -395,7 +490,7 @@ class SupabaseStore:
     def admin_search(self, keyword: str, limit: int, offset: int) -> list[dict[str, Any]]:
         base_query = (
             self.client.table(self.table)
-            .select("id,telegram_user_id,telegram_username,name,dob,uid,gender,source,created_at")
+            .select("id,telegram_user_id,telegram_username,name,dob,uid,gender,source,created_at,forward_status,forwarded_at,forward_error")
             .order("created_at", desc=True)
             .range(offset, offset + limit - 1)
         )
@@ -407,6 +502,142 @@ class SupabaseStore:
         else:
             result = base_query.execute()
         return result.data or []
+
+    def get_forwarding_config(self, user_id: int) -> dict[str, Any]:
+        defaults = ForwardingConfigInput().model_dump()
+        try:
+            result = (
+                self.client.table(self.forward_config_table)
+                .select("enabled,method,endpoint_url,headers_json,body_template_json,show_detailed_errors")
+                .eq("telegram_user_id", user_id)
+                .limit(1)
+                .execute()
+            )
+            row = (result.data or [None])[0]
+            return row or defaults
+        except Exception:
+            return defaults
+
+    def save_forwarding_config(self, user_id: int, cfg: ForwardingConfigInput) -> dict[str, Any]:
+        method = (cfg.method or "POST").upper().strip()
+        if method not in {"POST", "PUT", "PATCH"}:
+            raise ValueError("method must be POST/PUT/PATCH")
+        if cfg.enabled and not (cfg.endpoint_url or "").strip():
+            raise ValueError("endpoint_url is required when forwarding is enabled")
+        payload = {
+            "telegram_user_id": user_id,
+            "enabled": bool(cfg.enabled),
+            "method": method,
+            "endpoint_url": (cfg.endpoint_url or "").strip(),
+            "headers_json": cfg.headers_json or {},
+            "body_template_json": cfg.body_template_json or {},
+            "show_detailed_errors": bool(cfg.show_detailed_errors),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        result = (
+            self.client.table(self.forward_config_table)
+            .upsert(payload, on_conflict="telegram_user_id")
+            .execute()
+        )
+        return ((result.data or [payload])[0]) if hasattr(result, "data") else payload
+
+    def get_parse_for_user(self, record_id: int, user: TelegramUserCtx) -> dict[str, Any] | None:
+        q = self.client.table(self.table).select("*").eq("id", record_id).limit(1)
+        if not user.is_admin:
+            q = q.eq("telegram_user_id", user.user_id)
+        result = q.execute()
+        return (result.data or [None])[0]
+
+    def insert_manual_parse(self, user: TelegramUserCtx, payload: dict[str, str]) -> dict[str, Any]:
+        row = {
+            "telegram_user_id": user.user_id,
+            "telegram_username": user.username,
+            "name": payload["name"],
+            "dob": payload["dob"],
+            "uid": payload["uid"],
+            "gender": payload["gender"],
+            "ocr_text": "",
+            "source": payload["source"],
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        result = self.client.table(self.table).insert(row).execute()
+        return ((result.data or [row])[0]) if hasattr(result, "data") else row
+
+    def update_parse(self, record_id: int, user: TelegramUserCtx, payload: dict[str, str]) -> dict[str, Any]:
+        existing = self.get_parse_for_user(record_id, user)
+        if not existing:
+            raise PermissionError("record not found or not allowed")
+        result = (
+            self.client.table(self.table)
+            .update(
+                {
+                    "name": payload["name"],
+                    "dob": payload["dob"],
+                    "uid": payload["uid"],
+                    "gender": payload["gender"],
+                    "source": payload["source"],
+                }
+            )
+            .eq("id", record_id)
+            .execute()
+        )
+        return ((result.data or [existing])[0]) if hasattr(result, "data") else existing
+
+    def delete_parse(self, record_id: int, user: TelegramUserCtx) -> None:
+        existing = self.get_parse_for_user(record_id, user)
+        if not existing:
+            raise PermissionError("record not found or not allowed")
+        self.client.table(self.table).delete().eq("id", record_id).execute()
+
+    def _update_forward_status(self, record_id: int, status: str, error: str = "", code: int | None = None) -> None:
+        payload = {
+            "forward_status": status,
+            "forwarded_at": datetime.now(timezone.utc).isoformat(),
+            "forward_error": (error or "")[:300],
+        }
+        try:
+            self.client.table(self.table).update(payload).eq("id", record_id).execute()
+        except Exception:
+            pass
+        try:
+            self.client.table(self.forward_log_table).insert(
+                {
+                    "parse_id": record_id,
+                    "status": status,
+                    "response_code": code,
+                    "error": (error or "")[:500],
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                }
+            ).execute()
+        except Exception:
+            pass
+
+    def forward_record(self, record: dict[str, Any], cfg: dict[str, Any]) -> dict[str, Any]:
+        if not cfg.get("enabled"):
+            return {"status": "skipped_disabled"}
+        url = str(cfg.get("endpoint_url", "")).strip()
+        if not url:
+            return {"status": "skipped_missing_url"}
+        method = str(cfg.get("method", "POST")).upper()
+        headers = cfg.get("headers_json") or {}
+        body_tpl = cfg.get("body_template_json") or {}
+        if not isinstance(headers, dict) or not isinstance(body_tpl, dict):
+            return {"status": "skipped_invalid_template"}
+        ctx = _token_context(record)
+        rendered_headers = _render_tokens(headers, ctx)
+        rendered_body = _render_tokens(body_tpl, ctx)
+        try:
+            resp = session.request(method=method, url=url, headers=rendered_headers, json=rendered_body, timeout=20)
+            ok = 200 <= resp.status_code < 300
+            status = "success" if ok else "failed"
+            err = "" if ok else f"http_{resp.status_code}:{resp.text[:200]}"
+            if record.get("id"):
+                self._update_forward_status(int(record["id"]), status, err, resp.status_code)
+            return {"status": status, "code": resp.status_code, "error": err}
+        except Exception as exc:
+            if record.get("id"):
+                self._update_forward_status(int(record["id"]), "failed", str(exc), None)
+            return {"status": "failed", "error": str(exc)}
 
 
 class LocalExcelStore:
@@ -491,10 +722,18 @@ class StorageManager:
             sheet=LOCAL_EXCEL_SHEET,
         )
 
-    def save_parse(self, parsed: ParseResult, ocr_text: str, source: str, tg_user: TelegramUserCtx | None) -> dict[str, str]:
+    def save_parse(self, parsed: ParseResult, ocr_text: str, source: str, tg_user: TelegramUserCtx | None) -> dict[str, Any]:
+        supabase_result = self.supabase.save_parse(parsed, ocr_text, source, tg_user)
+        local_excel_result = self.local_excel.save_parse(parsed, ocr_text, source, tg_user)
+        forwarding = {"status": "skipped"}
+        if tg_user and supabase_result.get("status") == "saved":
+            cfg = self.supabase.get_forwarding_config(tg_user.user_id)
+            forwarding = self.supabase.forward_record(supabase_result.get("record") or {}, cfg)
         return {
-            "supabase": self.supabase.save_parse(parsed, ocr_text, source, tg_user),
-            "local_excel": self.local_excel.save_parse(parsed, ocr_text, source, tg_user),
+            "supabase": supabase_result.get("status"),
+            "local_excel": local_excel_result,
+            "forwarding": forwarding,
+            "record": supabase_result.get("record"),
         }
 
     def list_user_parses(self, user_id: int, limit: int, offset: int) -> list[dict[str, Any]]:
@@ -502,6 +741,28 @@ class StorageManager:
 
     def admin_search(self, keyword: str, limit: int, offset: int) -> list[dict[str, Any]]:
         return self.supabase.admin_search(keyword, limit, offset)
+
+    def get_forwarding_config(self, user_id: int) -> dict[str, Any]:
+        return self.supabase.get_forwarding_config(user_id)
+
+    def save_forwarding_config(self, user_id: int, cfg: ForwardingConfigInput) -> dict[str, Any]:
+        return self.supabase.save_forwarding_config(user_id, cfg)
+
+    def manual_insert(self, user: TelegramUserCtx, payload: dict[str, str]) -> dict[str, Any]:
+        row = self.supabase.insert_manual_parse(user, payload)
+        cfg = self.supabase.get_forwarding_config(user.user_id)
+        self.supabase.forward_record(row, cfg)
+        return row
+
+    def update_parse(self, record_id: int, user: TelegramUserCtx, payload: dict[str, str]) -> dict[str, Any]:
+        return self.supabase.update_parse(record_id, user, payload)
+
+    def delete_parse(self, record_id: int, user: TelegramUserCtx) -> None:
+        self.supabase.delete_parse(record_id, user)
+
+    def test_forwarding(self, user_id: int, record: dict[str, Any]) -> dict[str, Any]:
+        cfg = self.supabase.get_forwarding_config(user_id)
+        return self.supabase.forward_record(record, cfg)
 
     @property
     def supabase_ready(self) -> bool:
@@ -603,7 +864,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ALLOW_ORIGINS,
     allow_credentials=False,
-    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 
@@ -739,6 +1000,81 @@ async def admin_search(keyword: str = "", limit: int = 50, offset: int = 0, user
 
     records = await run_in_threadpool(store.admin_search, keyword, limit, offset)
     return ParseListResponse(total=len(records), is_admin=True, records=records)
+
+
+@app.get("/api/me/forwarding-config")
+async def get_my_forwarding_config(user: TelegramUserCtx = Depends(auth_user_ctx)) -> dict[str, Any]:
+    if not store.supabase_ready:
+        raise HTTPException(status_code=503, detail={"error": "storage_not_configured", "message": "Supabase is not configured or table is unavailable."})
+    cfg = await run_in_threadpool(store.get_forwarding_config, user.user_id)
+    return {"status": "success", "config": cfg}
+
+
+@app.put("/api/me/forwarding-config")
+async def put_my_forwarding_config(payload: ForwardingConfigInput, user: TelegramUserCtx = Depends(auth_user_ctx)) -> dict[str, Any]:
+    if not store.supabase_ready:
+        raise HTTPException(status_code=503, detail={"error": "storage_not_configured", "message": "Supabase is not configured or table is unavailable."})
+    try:
+        saved = await run_in_threadpool(store.save_forwarding_config, user.user_id, payload)
+        return {"status": "success", "config": saved}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail={"error": "invalid_config", "message": str(exc)})
+
+
+@app.post("/api/me/forwarding-test")
+async def post_forwarding_test(payload: ParseMutationInput, user: TelegramUserCtx = Depends(auth_user_ctx)) -> dict[str, Any]:
+    if not store.supabase_ready:
+        raise HTTPException(status_code=503, detail={"error": "storage_not_configured", "message": "Supabase is not configured or table is unavailable."})
+    try:
+        parsed = validated_parse_payload(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail={"error": "invalid_payload", "message": str(exc)})
+    record = {
+        "id": "test",
+        "telegram_user_id": user.user_id,
+        "telegram_username": user.username or "",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        **parsed,
+    }
+    result = await run_in_threadpool(store.test_forwarding, user.user_id, record)
+    return {"status": "success", "forwarding": result}
+
+
+@app.post("/api/me/parses")
+async def create_manual_parse(payload: ParseMutationInput, user: TelegramUserCtx = Depends(auth_user_ctx)) -> dict[str, Any]:
+    if not store.supabase_ready:
+        raise HTTPException(status_code=503, detail={"error": "storage_not_configured", "message": "Supabase is not configured or table is unavailable."})
+    try:
+        validated = validated_parse_payload(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail={"error": "invalid_payload", "message": str(exc)})
+    row = await run_in_threadpool(store.manual_insert, user, validated)
+    return {"status": "success", "record": row}
+
+
+@app.patch("/api/me/parses/{record_id}")
+async def update_parse_record(record_id: int, payload: ParseMutationInput, user: TelegramUserCtx = Depends(auth_user_ctx)) -> dict[str, Any]:
+    if not store.supabase_ready:
+        raise HTTPException(status_code=503, detail={"error": "storage_not_configured", "message": "Supabase is not configured or table is unavailable."})
+    try:
+        validated = validated_parse_payload(payload)
+        row = await run_in_threadpool(store.update_parse, record_id, user, validated)
+        return {"status": "success", "record": row}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail={"error": "invalid_payload", "message": str(exc)})
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail={"error": "forbidden", "message": str(exc)})
+
+
+@app.delete("/api/me/parses/{record_id}")
+async def delete_parse_record(record_id: int, user: TelegramUserCtx = Depends(auth_user_ctx)) -> dict[str, Any]:
+    if not store.supabase_ready:
+        raise HTTPException(status_code=503, detail={"error": "storage_not_configured", "message": "Supabase is not configured or table is unavailable."})
+    try:
+        await run_in_threadpool(store.delete_parse, record_id, user)
+        return {"status": "success"}
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail={"error": "forbidden", "message": str(exc)})
 
 
 async def _process_telegram_message(msg: dict[str, Any]) -> None:
@@ -1007,14 +1343,14 @@ DEMO_HTML = """<!doctype html>
     .popup.open { display: flex; }
 
     .popup-menu {
-      width: min(250px, 90vw);
+      width: min(460px, 95vw);
       background: var(--surface);
       border: 1px solid var(--line);
       border-radius: 12px;
       box-shadow: 0 14px 30px rgba(0,0,0,.12);
       padding: 8px;
       display: grid;
-      gap: 6px;
+      gap: 8px;
       animation: popupIn .18s ease;
     }
     @keyframes popupIn { from { opacity:0; transform: translateY(-6px);} to { opacity:1; transform: translateY(0);} }
@@ -1033,6 +1369,9 @@ DEMO_HTML = """<!doctype html>
       gap: 8px;
       cursor: pointer;
     }
+    .submenu { display: none; border: 1px solid var(--line); border-radius: 10px; padding: 8px; }
+    .submenu.open { display: block; animation: reveal .18s ease both; }
+    .menu-title { font-size: .78rem; color: var(--muted); margin: 0 0 6px; }
 
     .content {
       padding: 12px;
@@ -1120,7 +1459,7 @@ DEMO_HTML = """<!doctype html>
       border: 1px solid var(--line);
       background: linear-gradient(165deg, color-mix(in srgb, var(--surface) 92%, white 8%), var(--surface-2));
       border-radius: 12px;
-      padding: 10px;
+      padding: 11px;
       animation: reveal .26s ease both;
       transition: transform .16s ease, border-color .2s ease;
     }
@@ -1136,6 +1475,21 @@ DEMO_HTML = """<!doctype html>
       margin-bottom: 8px;
       font-size: .76rem;
       color: var(--muted);
+    }
+    .tile-uid {
+      font-size: 1.08rem;
+      font-weight: 800;
+      color: var(--accent);
+      margin: 2px 0 2px;
+      letter-spacing: .02em;
+    }
+    .tile-name {
+      color: color-mix(in srgb, var(--ink) 82%, var(--muted));
+      margin-bottom: 8px;
+      font-size: .9rem;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
     .tile-grid {
       display: grid;
@@ -1164,6 +1518,41 @@ DEMO_HTML = """<!doctype html>
       overflow: hidden;
       text-overflow: ellipsis;
     }
+    .tile-actions {
+      margin-top: 8px;
+      display: flex;
+      justify-content: flex-end;
+    }
+    .icon-mini {
+      border: 1px solid var(--line);
+      background: color-mix(in srgb, var(--surface) 90%, var(--accent-soft));
+      color: var(--ink);
+      border-radius: 8px;
+      width: 34px;
+      height: 34px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+    }
+    .toast {
+      position: fixed;
+      z-index: 80;
+      right: 12px;
+      bottom: calc(var(--nav-h) + env(safe-area-inset-bottom) + 14px);
+      background: var(--surface-2);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 10px 12px;
+      font-size: .84rem;
+      color: var(--ink);
+      opacity: 0;
+      transform: translateY(8px);
+      transition: all .2s ease;
+      pointer-events: none;
+    }
+    .toast.open { opacity: 1; transform: translateY(0); }
+    .form-grid { display: grid; gap: 8px; }
 
     @keyframes reveal {
       from { opacity: 0; transform: translateY(8px); }
@@ -1353,24 +1742,75 @@ DEMO_HTML = """<!doctype html>
 
   <div id="popup" class="popup" aria-hidden="true">
     <div class="popup-menu" role="menu">
-      <button class="menu-item" data-theme-btn="default"><iconify-icon icon="solar:palette-round-outline"></iconify-icon> Theme: Default</button>
-      <button class="menu-item" data-theme-btn="warm"><iconify-icon icon="solar:palette-round-outline"></iconify-icon> Theme: Warm</button>
-      <button class="menu-item" data-theme-btn="soft-dark"><iconify-icon icon="solar:palette-round-outline"></iconify-icon> Theme: Soft Dark</button>
+      <button class="menu-item" data-submenu="theme"><iconify-icon icon="solar:palette-round-outline"></iconify-icon> Theme & Customization</button>
+      <button class="menu-item" data-submenu="forwarding"><iconify-icon icon="solar:arrow-right-up-outline"></iconify-icon> Forwarding</button>
+      <button class="menu-item" data-submenu="errors"><iconify-icon icon="solar:danger-triangle-outline"></iconify-icon> Error Handling</button>
+      <button class="menu-item" data-submenu="data"><iconify-icon icon="solar:database-outline"></iconify-icon> Data Management</button>
       <button class="menu-item" id="refreshAll"><iconify-icon icon="solar:refresh-outline"></iconify-icon> Refresh Data</button>
+
+      <div id="submenu-theme" class="submenu">
+        <p class="menu-title">Theme & Customization</p>
+        <div class="controls">
+          <button class="menu-item" data-theme-btn="default">Default</button>
+          <button class="menu-item" data-theme-btn="warm">Warm</button>
+          <button class="menu-item" data-theme-btn="soft-dark">Soft Dark</button>
+        </div>
+      </div>
+
+      <div id="submenu-forwarding" class="submenu">
+        <p class="menu-title">Forwarding Settings</p>
+        <div class="form-grid">
+          <label><input type="checkbox" id="fwEnabled" /> Enable forwarding on new parse</label>
+          <select id="fwMethod" class="input"><option>POST</option><option>PUT</option><option>PATCH</option></select>
+          <input id="fwUrl" class="input" placeholder="https://example.com/webhook" />
+          <textarea id="fwHeaders" class="input" rows="3" placeholder='{"Authorization":"Bearer ..."}'></textarea>
+          <textarea id="fwBody" class="input" rows="4" placeholder='{"uid":"%uid%","name":"%name%"}'></textarea>
+          <label><input type="checkbox" id="fwDetailed" /> Show detailed errors</label>
+          <div class="controls">
+            <button class="btn primary" id="fwSaveBtn">Save</button>
+            <button class="btn" id="fwTestBtn">Test</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="submenu-errors" class="submenu">
+        <p class="menu-title">Error Handling</p>
+        <div class="whoami">Forward failures are non-blocking. Parse records are saved even if forwarding fails.</div>
+      </div>
+
+      <div id="submenu-data" class="submenu">
+        <p class="menu-title">Insert / Edit / Delete Record</p>
+        <div class="form-grid">
+          <input id="mRecordId" class="input" placeholder="Record ID (for edit/delete)" />
+          <input id="mUid" class="input" placeholder="UID (12 digits)" />
+          <input id="mName" class="input" placeholder="Name" />
+          <input id="mDob" class="input" placeholder="DOB DD/MM/YYYY" />
+          <select id="mGender" class="input"><option>Male</option><option>Female</option><option>Other</option></select>
+          <select id="mSource" class="input"><option>manual</option><option>api</option><option>webhook</option></select>
+          <div class="controls">
+            <button class="btn primary" id="mInsertBtn">Insert</button>
+            <button class="btn" id="mUpdateBtn">Update</button>
+            <button class="btn" id="mDeleteBtn">Delete</button>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
+  <div id="toast" class="toast"></div>
 
 <script>
 const tg = window.Telegram?.WebApp;
 if (tg) tg.ready();
 const initData = tg?.initData || "";
-const authHeader = { "Authorization": `tma ${initData}` };
+const authHeader = { "Authorization": `tma ${initData}`, "Content-Type": "application/json" };
+const parseAuthHeader = { "Authorization": `tma ${initData}` };
 
 const parseBtn = document.getElementById('parseBtn');
 const fileInput = document.getElementById('file');
 const parseStatus = document.getElementById('parseStatus');
 const parseResult = document.getElementById('parseResult');
 const whoami = document.getElementById('whoami');
+const toastEl = document.getElementById('toast');
 
 const myLimit = 20;
 let myOffset = 0;
@@ -1380,224 +1820,232 @@ let adminKeyword = '';
 let isAdmin = false;
 let myCachedRows = [];
 
-function formatTimestamp(v, withTime = true) {
+function toast(text) {
+  toastEl.textContent = text;
+  toastEl.classList.add('open');
+  setTimeout(() => toastEl.classList.remove('open'), 1800);
+}
+function formatTimestamp(v) {
   if (!v) return '';
   const d = new Date(v);
   if (Number.isNaN(d.getTime())) return v;
-  const dd = String(d.getDate()).padStart(2, '0');
-  const mm = String(d.getMonth() + 1).padStart(2, '0');
-  const yyyy = d.getFullYear();
-  if (!withTime) return `${dd}-${mm}-${yyyy}`;
-  const hh = String(d.getHours()).padStart(2, '0');
-  const min = String(d.getMinutes()).padStart(2, '0');
-  const ss = String(d.getSeconds()).padStart(2, '0');
-  return `${dd}-${mm}-${yyyy} ${hh}:${min}:${ss}`;
+  return `${String(d.getDate()).padStart(2, '0')}-${String(d.getMonth() + 1).padStart(2, '0')}-${d.getFullYear()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
-
 function setStatus(el, text, ok = true, loading = false) {
   el.classList.remove('ok', 'bad');
   el.innerHTML = loading ? `<span class="loader"></span>${text}` : text;
   el.classList.add(ok ? 'ok' : 'bad');
 }
-
-function setPageInfo(elId, offset, limit) {
-  const page = Math.floor(offset / limit) + 1;
-  document.getElementById(elId).textContent = `Page ${page}`;
+function setPageInfo(elId, offset, limit) { document.getElementById(elId).textContent = `Page ${Math.floor(offset / limit) + 1}`; }
+function shareTextForRecord(r) {
+  return `UID: ${r.uid || '-'}\nName: ${r.name || '-'}\nDOB: ${r.dob || '-'}\nGender: ${r.gender || '-'}\nSource: ${r.source || '-'}\nDate: ${formatTimestamp(r.created_at)}`;
 }
-
-function myRowHtml(r) {
+async function shareRecord(id, source) {
+  const row = source.find(x => String(x.id) === String(id));
+  if (!row) return;
+  const payload = shareTextForRecord(row);
+  try {
+    if (navigator.share) {
+      await navigator.share({ title: 'Parsed Aadhaar Record', text: payload });
+      toast('Shared');
+      return;
+    }
+    await navigator.clipboard.writeText(payload);
+    toast('Copied to clipboard');
+  } catch (e) { toast('Share failed'); }
+}
+function tileHtml(r, isAdminTile = false) {
+  const extra = isAdminTile ? `<div class="tile-name">${r.name || '-'} · @${r.telegram_username || '-'}</div>` : `<div class="tile-name">${r.name || '-'}</div>`;
   return `<article class="record-tile">
-    <div class="tile-top"><span><iconify-icon icon="solar:calendar-outline"></iconify-icon> ${formatTimestamp(r.created_at, true)}</span><span>${r.source || '-'}</span></div>
-    <div class="tile-grid">
-      <div class="tile-item"><b>Name</b><span>${r.name || '-'}</span></div>
-      <div class="tile-item"><b>DOB</b><span>${r.dob || '-'}</span></div>
-      <div class="tile-item"><b>UID</b><span>${r.uid || '-'}</span></div>
-      <div class="tile-item"><b>Gender</b><span>${r.gender || '-'}</span></div>
-    </div>
-  </article>`;
+      <div class="tile-top"><span>${formatTimestamp(r.created_at)}</span><span>${r.source || '-'}</span></div>
+      <div class="tile-uid">${r.uid || '-'}</div>
+      ${extra}
+      <div class="tile-grid">
+        <div class="tile-item"><b>DOB</b><span>${r.dob || '-'}</span></div>
+        <div class="tile-item"><b>Gender</b><span>${r.gender || '-'}</span></div>
+      </div>
+      <div class="tile-actions"><button class="icon-mini" data-share-id="${r.id}" data-admin="${isAdminTile ? '1':'0'}"><iconify-icon icon="solar:share-outline"></iconify-icon></button></div>
+    </article>`;
 }
-
-function adminRowHtml(r) {
-  return `<article class="record-tile">
-    <div class="tile-top"><span><iconify-icon icon="solar:calendar-outline"></iconify-icon> ${formatTimestamp(r.created_at, true)}</span><span><iconify-icon icon="solar:user-id-outline"></iconify-icon> ${r.telegram_user_id || '-'}</span></div>
-    <div class="tile-grid">
-      <div class="tile-item"><b>Username</b><span>${r.telegram_username || '-'}</span></div>
-      <div class="tile-item"><b>Name</b><span>${r.name || '-'}</span></div>
-      <div class="tile-item"><b>DOB</b><span>${r.dob || '-'}</span></div>
-      <div class="tile-item"><b>UID</b><span>${r.uid || '-'}</span></div>
-      <div class="tile-item"><b>Gender</b><span>${r.gender || '-'}</span></div>
-      <div class="tile-item"><b>Source</b><span>${r.source || '-'}</span></div>
-    </div>
-  </article>`;
+function bindShareActions() {
+  document.querySelectorAll('[data-share-id]').forEach(btn => {
+    btn.onclick = async () => {
+      const useAdmin = btn.getAttribute('data-admin') === '1';
+      const source = useAdmin ? (window.__adminRows || []) : myCachedRows;
+      await shareRecord(btn.getAttribute('data-share-id'), source);
+    };
+  });
 }
-
 function switchTab(tab) {
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
   document.getElementById(`tab-${tab}`)?.classList.add('active');
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
   document.querySelector(`.tab-btn[data-tab="${tab}"]`)?.classList.add('active');
 }
-
+function renderMine() {
+  const q = (document.getElementById('mySearch').value || '').trim().toLowerCase();
+  const filtered = q ? myCachedRows.filter(r => [r.name, r.dob, r.uid, r.gender, r.source].some(v => String(v || '').toLowerCase().includes(q))) : myCachedRows;
+  document.getElementById('myRows').innerHTML = filtered.map(r => tileHtml(r, false)).join('') || '<div class="tile-item"><b>Status</b><span>No records found</span></div>';
+  document.getElementById('myCount').textContent = `${filtered.length} records`;
+  bindShareActions();
+}
 async function loadMine() {
   document.getElementById('myLoading').style.display = 'block';
-  const res = await fetch(`/api/me/parses?limit=${myLimit}&offset=${myOffset}`, { headers: authHeader });
+  const res = await fetch(`/api/me/parses?limit=${myLimit}&offset=${myOffset}`, { headers: parseAuthHeader });
   const data = await res.json();
   document.getElementById('myLoading').style.display = 'none';
   if (!res.ok) throw new Error(data?.detail?.message || 'Failed to load records');
-
   myCachedRows = data.records || [];
-  const q = (document.getElementById('mySearch').value || '').trim().toLowerCase();
-  const filtered = q ? myCachedRows.filter(r => [r.name, r.dob, r.uid, r.gender, r.source].some(v => String(v || '').toLowerCase().includes(q))) : myCachedRows;
   isAdmin = !!data.is_admin;
-  document.getElementById('myRows').innerHTML = filtered.map(myRowHtml).join('') || '<div class="tile-item"><b>Status</b><span>No records found</span></div>';
-  document.getElementById('myCount').textContent = `${filtered.length} records`;
+  renderMine();
   document.getElementById('myPrev').disabled = myOffset === 0;
   document.getElementById('myNext').disabled = myCachedRows.length < myLimit;
   setPageInfo('myPageInfo', myOffset, myLimit);
-
   const user = tg?.initDataUnsafe?.user || {};
   const fullName = [user.first_name, user.last_name].filter(Boolean).join(' ').trim() || 'Telegram User';
-  const username = user.username ? '@' + user.username : '@unknown';
-  const userId = user.id ? String(user.id) : 'N/A';
-  const avatar = user.photo_url || `https://ui-avatars.com/api/?background=1a2b3e&color=edf4fb&name=${encodeURIComponent(fullName)}`;
-  document.getElementById('userAvatar').src = avatar;
+  document.getElementById('userAvatar').src = user.photo_url || `https://ui-avatars.com/api/?background=1a2b3e&color=edf4fb&name=${encodeURIComponent(fullName)}`;
   document.getElementById('heroName').textContent = fullName;
-  document.getElementById('heroMeta').textContent = `${username} • ID ${userId}`;
+  document.getElementById('heroMeta').textContent = `${user.username ? '@' + user.username : '@unknown'} • ID ${user.id || 'N/A'}`;
   whoami.textContent = `Authenticated. Admin: ${isAdmin ? 'Yes' : 'No'}`;
   document.getElementById('adminCard').style.display = isAdmin ? 'block' : 'none';
   document.getElementById('adminLocked').style.display = isAdmin ? 'none' : 'block';
   if (isAdmin) await loadAdmin();
 }
-
 async function loadAdmin() {
   if (!isAdmin) return;
-  const url = `/api/admin/search?keyword=${encodeURIComponent(adminKeyword)}&limit=${adminLimit}&offset=${adminOffset}`;
-  const res = await fetch(url, { headers: authHeader });
+  const res = await fetch(`/api/admin/search?keyword=${encodeURIComponent(adminKeyword)}&limit=${adminLimit}&offset=${adminOffset}`, { headers: parseAuthHeader });
   const data = await res.json();
-  const tbody = document.getElementById('adminRows');
-  if (!res.ok) {
-    tbody.innerHTML = `<div class="tile-item"><b>Error</b><span>${data?.detail?.message || 'Search failed'}</span></div>`;
-    document.getElementById('adminCount').textContent = '0 results';
-    return;
-  }
+  const target = document.getElementById('adminRows');
+  if (!res.ok) { target.innerHTML = `<div class="tile-item"><b>Error</b><span>${data?.detail?.message || 'Search failed'}</span></div>`; return; }
   const rows = data.records || [];
-  tbody.innerHTML = rows.map(adminRowHtml).join('') || '<div class="tile-item"><b>Status</b><span>No results found</span></div>';
+  window.__adminRows = rows;
+  target.innerHTML = rows.map(r => tileHtml(r, true)).join('') || '<div class="tile-item"><b>Status</b><span>No results found</span></div>';
   document.getElementById('adminCount').textContent = `${rows.length} results`;
   document.getElementById('adminPrev').disabled = adminOffset === 0;
   document.getElementById('adminNext').disabled = rows.length < adminLimit;
   setPageInfo('adminPageInfo', adminOffset, adminLimit);
+  bindShareActions();
 }
-
 async function parseNow() {
   const f = fileInput.files?.[0];
-  if (!f) {
-    setStatus(parseStatus, 'Choose a file first', false);
-    return;
-  }
-  parseBtn.disabled = true;
-  setStatus(parseStatus, 'Processing...', true, true);
-  const fd = new FormData();
-  fd.append('file', f);
+  if (!f) return setStatus(parseStatus, 'Choose a file first', false);
+  parseBtn.disabled = true; setStatus(parseStatus, 'Processing...', true, true);
+  const fd = new FormData(); fd.append('file', f);
   try {
-    const res = await fetch('/api/parse', { method: 'POST', headers: authHeader, body: fd });
+    const res = await fetch('/api/parse', { method: 'POST', headers: parseAuthHeader, body: fd });
     const data = await res.json();
     parseResult.textContent = JSON.stringify(data, null, 2);
     if (!res.ok) throw new Error(data?.detail?.message || 'Parse failed');
     setStatus(parseStatus, 'Parsed successfully', true);
-    myOffset = 0;
-    await loadMine();
-    switchTab('history');
-  } catch (e) {
-    setStatus(parseStatus, e.message, false);
-  } finally {
-    parseBtn.disabled = false;
-  }
+    myOffset = 0; await loadMine(); switchTab('history');
+  } catch (e) { setStatus(parseStatus, e.message, false); }
+  finally { parseBtn.disabled = false; }
 }
-
+async function saveForwardingConfig() {
+  const payload = {
+    enabled: document.getElementById('fwEnabled').checked,
+    method: document.getElementById('fwMethod').value,
+    endpoint_url: document.getElementById('fwUrl').value.trim(),
+    headers_json: JSON.parse(document.getElementById('fwHeaders').value || '{}'),
+    body_template_json: JSON.parse(document.getElementById('fwBody').value || '{}'),
+    show_detailed_errors: document.getElementById('fwDetailed').checked
+  };
+  const res = await fetch('/api/me/forwarding-config', { method: 'PUT', headers: authHeader, body: JSON.stringify(payload) });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data?.detail?.message || 'Save failed');
+  toast('Forwarding config saved');
+}
+async function loadForwardingConfig() {
+  const res = await fetch('/api/me/forwarding-config', { headers: parseAuthHeader });
+  const data = await res.json();
+  if (!res.ok) return;
+  const c = data.config || {};
+  document.getElementById('fwEnabled').checked = !!c.enabled;
+  document.getElementById('fwMethod').value = c.method || 'POST';
+  document.getElementById('fwUrl').value = c.endpoint_url || '';
+  document.getElementById('fwHeaders').value = JSON.stringify(c.headers_json || {}, null, 2);
+  document.getElementById('fwBody').value = JSON.stringify(c.body_template_json || {}, null, 2);
+  document.getElementById('fwDetailed').checked = !!c.show_detailed_errors;
+}
+async function forwardingTest() {
+  const payload = {
+    uid: document.getElementById('mUid').value || '345613986248',
+    name: document.getElementById('mName').value || 'Test User',
+    dob: document.getElementById('mDob').value || '01/01/2000',
+    gender: document.getElementById('mGender').value || 'Male',
+    source: document.getElementById('mSource').value || 'manual'
+  };
+  const res = await fetch('/api/me/forwarding-test', { method: 'POST', headers: authHeader, body: JSON.stringify(payload) });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data?.detail?.message || 'Forwarding test failed');
+  toast(`Forwarding test: ${data.forwarding?.status || 'ok'}`);
+}
+function mutationPayload() {
+  return {
+    uid: document.getElementById('mUid').value.trim(),
+    name: document.getElementById('mName').value.trim(),
+    dob: document.getElementById('mDob').value.trim(),
+    gender: document.getElementById('mGender').value.trim(),
+    source: document.getElementById('mSource').value.trim()
+  };
+}
+async function insertRecord() {
+  const res = await fetch('/api/me/parses', { method: 'POST', headers: authHeader, body: JSON.stringify(mutationPayload()) });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data?.detail?.message || 'Insert failed');
+  toast('Record inserted'); await loadMine(); if (isAdmin) await loadAdmin();
+}
+async function updateRecord() {
+  const id = Number(document.getElementById('mRecordId').value || 0); if (!id) throw new Error('Record ID required');
+  const res = await fetch(`/api/me/parses/${id}`, { method: 'PATCH', headers: authHeader, body: JSON.stringify(mutationPayload()) });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data?.detail?.message || 'Update failed');
+  toast('Record updated'); await loadMine(); if (isAdmin) await loadAdmin();
+}
+async function deleteRecord() {
+  const id = Number(document.getElementById('mRecordId').value || 0); if (!id) throw new Error('Record ID required');
+  if (!confirm('Delete this record?')) return;
+  const res = await fetch(`/api/me/parses/${id}`, { method: 'DELETE', headers: parseAuthHeader });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data?.detail?.message || 'Delete failed');
+  toast('Record deleted'); await loadMine(); if (isAdmin) await loadAdmin();
+}
 function togglePopup(force) {
   const popup = document.getElementById('popup');
   const open = force !== undefined ? force : !popup.classList.contains('open');
   popup.classList.toggle('open', open);
   popup.setAttribute('aria-hidden', String(!open));
 }
-
 function setupInteractions() {
-  document.getElementById('myPrev').addEventListener('click', async () => {
-    myOffset = Math.max(0, myOffset - myLimit);
-    await loadMine();
+  document.getElementById('myPrev').onclick = async () => { myOffset = Math.max(0, myOffset - myLimit); await loadMine(); };
+  document.getElementById('myNext').onclick = async () => { myOffset += myLimit; await loadMine(); };
+  document.getElementById('adminPrev').onclick = async () => { adminOffset = Math.max(0, adminOffset - adminLimit); await loadAdmin(); };
+  document.getElementById('adminNext').onclick = async () => { adminOffset += adminLimit; await loadAdmin(); };
+  document.getElementById('searchBtn').onclick = async () => { adminKeyword = (document.getElementById('keyword').value || '').trim(); adminOffset = 0; await loadAdmin(); };
+  document.getElementById('clearSearchBtn').onclick = async () => { document.getElementById('keyword').value = ''; adminKeyword = ''; adminOffset = 0; await loadAdmin(); };
+  parseBtn.onclick = parseNow;
+  document.getElementById('mySearch').addEventListener('input', renderMine);
+  document.getElementById('menuBtn').onclick = () => togglePopup();
+  document.getElementById('popup').addEventListener('click', (e) => { if (e.target.id === 'popup') togglePopup(false); });
+  document.querySelectorAll('[data-theme-btn]').forEach(btn => btn.onclick = () => { document.body.setAttribute('data-theme', btn.getAttribute('data-theme-btn')); });
+  document.querySelectorAll('[data-submenu]').forEach(btn => btn.onclick = () => {
+    const key = btn.getAttribute('data-submenu');
+    document.querySelectorAll('.submenu').forEach(s => s.classList.remove('open'));
+    document.getElementById(`submenu-${key}`).classList.add('open');
   });
-  document.getElementById('myNext').addEventListener('click', async () => {
-    myOffset += myLimit;
-    await loadMine();
-  });
-  document.getElementById('adminPrev').addEventListener('click', async () => {
-    adminOffset = Math.max(0, adminOffset - adminLimit);
-    await loadAdmin();
-  });
-  document.getElementById('adminNext').addEventListener('click', async () => {
-    adminOffset += adminLimit;
-    await loadAdmin();
-  });
-
-  document.getElementById('searchBtn').addEventListener('click', async () => {
-    adminKeyword = (document.getElementById('keyword').value || '').trim();
-    adminOffset = 0;
-    await loadAdmin();
-  });
-  document.getElementById('clearSearchBtn').addEventListener('click', async () => {
-    document.getElementById('keyword').value = '';
-    adminKeyword = '';
-    adminOffset = 0;
-    await loadAdmin();
-  });
-
-  parseBtn.addEventListener('click', parseNow);
-
-  const menuBtn = document.getElementById('menuBtn');
-  const popup = document.getElementById('popup');
-  menuBtn.addEventListener('click', () => togglePopup());
-  popup.addEventListener('click', (e) => {
-    if (e.target === popup) togglePopup(false);
-  });
-
-  document.querySelectorAll('[data-theme-btn]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      document.body.setAttribute('data-theme', btn.getAttribute('data-theme-btn'));
-      togglePopup(false);
-    });
-  });
-
-  document.getElementById('refreshAll').addEventListener('click', async () => {
-    togglePopup(false);
-    await loadMine();
-  });
-
-  document.querySelectorAll('.tab-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const tab = btn.getAttribute('data-tab');
-      if (tab === 'admin' && !isAdmin) {
-        switchTab('admin');
-        return;
-      }
-      switchTab(tab);
-    });
-  });
-
-  document.getElementById('mySearch').addEventListener('input', async () => {
-    const q = (document.getElementById('mySearch').value || '').trim().toLowerCase();
-    const filtered = q ? myCachedRows.filter(r => [r.name, r.dob, r.uid, r.gender, r.source].some(v => String(v || '').toLowerCase().includes(q))) : myCachedRows;
-    document.getElementById('myRows').innerHTML = filtered.map(myRowHtml).join('') || '<div class="tile-item"><b>Status</b><span>No records found</span></div>';
-    document.getElementById('myCount').textContent = `${filtered.length} records`;
-  });
+  document.getElementById('refreshAll').onclick = async () => { togglePopup(false); await loadMine(); };
+  document.getElementById('fwSaveBtn').onclick = async () => { try { await saveForwardingConfig(); } catch (e) { toast(e.message); } };
+  document.getElementById('fwTestBtn').onclick = async () => { try { await forwardingTest(); } catch (e) { toast(e.message); } };
+  document.getElementById('mInsertBtn').onclick = async () => { try { await insertRecord(); } catch (e) { toast(e.message); } };
+  document.getElementById('mUpdateBtn').onclick = async () => { try { await updateRecord(); } catch (e) { toast(e.message); } };
+  document.getElementById('mDeleteBtn').onclick = async () => { try { await deleteRecord(); } catch (e) { toast(e.message); } };
+  document.querySelectorAll('.tab-btn').forEach(btn => btn.onclick = () => switchTab(btn.getAttribute('data-tab')));
 }
-
 setupInteractions();
 switchTab('history');
 setStatus(parseStatus, 'Idle', true);
-loadMine().catch(err => {
-  whoami.textContent = `Auth failed: ${err.message}`;
-  whoami.classList.add('bad');
-});
+loadForwardingConfig().catch(() => {});
+loadMine().catch(err => { whoami.textContent = `Auth failed: ${err.message}`; whoami.classList.add('bad'); });
 </script>
 </body>
 </html>"""
