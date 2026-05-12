@@ -767,12 +767,22 @@ async def _process_telegram_message(msg: dict[str, Any]) -> None:
         )
         storage_status = store.save_parse(parsed, ocr_text, source="webhook", tg_user=user_ctx)
 
+        supabase_status = storage_status.get("supabase", "unknown")
+        excel_status = storage_status.get("local_excel", "unknown")
+        compact_storage = "Saved"
+        if str(supabase_status).startswith("failed"):
+            compact_storage = "Save issue"
+        elif str(excel_status).startswith("failed"):
+            compact_storage = "Saved (sheet issue)"
+        elif "skipped" in str(excel_status):
+            compact_storage = "Saved"
+
         parsed_text = (
             f"*Name:* *{_escape_markdown(parsed.name)}*\n"
             f"*Date of Birth:* {_escape_markdown(parsed.dob)}\n"
             f"*Gender:* {_escape_markdown(parsed.gender)}\n"
             f"*Aadhaar No:* `{_escape_markdown(parsed.uid)}`\n"
-            f"*Storage:* `{_escape_markdown(json.dumps(storage_status, ensure_ascii=False))}`"
+            f"*Storage:* {_escape_markdown(compact_storage)}"
         )
 
         final_text = f"✅ *Aadhaar Parsed Successfully*\n\n{parsed_text}"
