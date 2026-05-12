@@ -751,6 +751,7 @@ async def _process_telegram_message(msg: dict[str, Any]) -> None:
     user_id = sender.get("id")
     username = sender.get("username")
     first_name = sender.get("first_name") or "User"
+    source_message_id = msg.get("message_id")
 
     photos = msg.get("photo") or []
     document = msg.get("document") or {}
@@ -761,11 +762,12 @@ async def _process_telegram_message(msg: dict[str, Any]) -> None:
         file_id = document.get("file_id")
 
     if not file_id:
-        send_message(chat_id, f"Hi {_escape_markdown(first_name)}, send me an Aadhaar image.")
+        send_message(
+            chat_id,
+            f"Hi {_escape_markdown(first_name)}, send me an Aadhaar image.",
+            reply_to_message_id=source_message_id if isinstance(source_message_id, int) else None,
+        )
         return
-
-    processing = send_message(chat_id, f"Hi {_escape_markdown(first_name)},\n\n📥 Image received\n🧠 Running OCR + Aadhaar parsing...")
-    processing_message_id = processing.get("result", {}).get("message_id")
 
     try:
         image_bytes = get_file_bytes(file_id)
@@ -797,10 +799,11 @@ async def _process_telegram_message(msg: dict[str, Any]) -> None:
         )
 
         final_text = f"✅ *Aadhaar Parsed Successfully*\n\n{parsed_text}"
-        if isinstance(processing_message_id, int):
-            edit_message_text(chat_id, processing_message_id, final_text)
-        else:
-            send_message(chat_id, final_text)
+        send_message(
+            chat_id,
+            final_text,
+            reply_to_message_id=source_message_id if isinstance(source_message_id, int) else None,
+        )
 
         if EXTERNAL_CHAT_ID:
             sender_label = f"@{username}" if username else (first_name or "Unknown")
@@ -820,13 +823,11 @@ async def _process_telegram_message(msg: dict[str, Any]) -> None:
             "❌ Could not parse a valid Aadhaar.\n\n"
             "Please send a clearer Aadhaar image with visible number and DOB."
         )
-        if isinstance(processing_message_id, int):
-            try:
-                edit_message_text(chat_id, processing_message_id, failure_text)
-            except Exception:
-                send_message(chat_id, failure_text)
-        else:
-            send_message(chat_id, failure_text)
+        send_message(
+            chat_id,
+            failure_text,
+            reply_to_message_id=source_message_id if isinstance(source_message_id, int) else None,
+        )
 
 
 @app.post("/telegram/webhook/{webhook_secret}")
