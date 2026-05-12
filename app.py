@@ -889,7 +889,7 @@ DEMO_HTML = """<!doctype html>
     html, body { height: 100%; }
     body {
       margin: 0;
-      background: radial-gradient(circle at top left, var(--accent-soft), var(--bg) 42%);
+      background: var(--bg);
       color: var(--ink);
       font-family: "Inter", "Segoe UI", ui-sans-serif, system-ui, sans-serif;
       -webkit-font-smoothing: antialiased;
@@ -1130,7 +1130,7 @@ DEMO_HTML = """<!doctype html>
       bottom: 0;
       z-index: 40;
       min-height: var(--nav-h);
-      background: color-mix(in srgb, var(--surface) 88%, transparent);
+      background: var(--surface);
       backdrop-filter: blur(10px);
       border-top: 1px solid var(--line);
       display: flex;
@@ -1183,7 +1183,7 @@ DEMO_HTML = """<!doctype html>
     .skeleton {
       height: 36px;
       border-radius: 8px;
-      background: linear-gradient(90deg, color-mix(in srgb, var(--surface) 88%, var(--accent-soft)) 25%, color-mix(in srgb, var(--surface) 78%, var(--accent-soft)) 40%, color-mix(in srgb, var(--surface) 88%, var(--accent-soft)) 60%);
+      background: color-mix(in srgb, var(--surface) 86%, var(--accent-soft));
       background-size: 200% 100%;
       animation: shimmer 1.3s infinite linear;
       margin-bottom: 8px;
@@ -1220,7 +1220,7 @@ DEMO_HTML = """<!doctype html>
           <div class="table-wrap">
             <table>
               <thead>
-                <tr><th><iconify-icon icon="solar:calendar-outline"></iconify-icon> Created At</th><th><iconify-icon icon="solar:user-outline"></iconify-icon> Name</th><th>DOB</th><th>UID</th><th><iconify-icon icon="solar:shield-check-outline"></iconify-icon> Gender</th><th><iconify-icon icon="solar:widget-3-outline"></iconify-icon> Source</th></tr>
+                <tr><th><iconify-icon icon="solar:calendar-outline"></iconify-icon> Created At</th><th><iconify-icon icon="solar:user-outline"></iconify-icon> Name</th><th><iconify-icon icon="solar:calendar-date-outline"></iconify-icon> DOB</th><th><iconify-icon icon="solar:card-outline"></iconify-icon> UID</th><th><iconify-icon icon="solar:shield-check-outline"></iconify-icon> Gender</th><th><iconify-icon icon="solar:widget-3-outline"></iconify-icon> Source</th></tr>
               </thead>
               <tbody id="myRows"></tbody>
             </table>
@@ -1269,7 +1269,7 @@ DEMO_HTML = """<!doctype html>
           <div class="table-wrap" style="margin-top:10px">
             <table>
               <thead>
-                <tr><th><iconify-icon icon="solar:calendar-outline"></iconify-icon> Created At</th><th>User ID</th><th>Username</th><th>Name</th><th>DOB</th><th>UID</th><th>Gender</th></tr>
+                <tr><th><iconify-icon icon="solar:calendar-outline"></iconify-icon> Created At</th><th><iconify-icon icon="solar:user-id-outline"></iconify-icon> User ID</th><th><iconify-icon icon="solar:user-outline"></iconify-icon> Username</th><th><iconify-icon icon="solar:user-outline"></iconify-icon> Name</th><th><iconify-icon icon="solar:calendar-date-outline"></iconify-icon> DOB</th><th><iconify-icon icon="solar:card-outline"></iconify-icon> UID</th><th><iconify-icon icon="solar:shield-check-outline"></iconify-icon> Gender</th></tr>
               </thead>
               <tbody id="adminRows"></tbody>
             </table>
