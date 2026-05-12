@@ -819,19 +819,18 @@ async def telegram_webhook(webhook_secret: str, payload: dict[str, Any]) -> dict
 
 
 DEMO_HTML = """<!doctype html>
-<html lang=\"en\">
+<html lang="en">
 <head>
-  <meta charset=\"utf-8\" />
-  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>Aadhaar Scanner Mini App</title>
-  <script src=\"https://telegram.org/js/telegram-web-app.js\"></script>
-  <script src=\"https://code.iconify.design/iconify-icon/1.0.8/iconify-icon.min.js\"></script>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <script src="https://code.iconify.design/iconify-icon/1.0.8/iconify-icon.min.js"></script>
   <style>
-    /* Minimals.cc inspired neutral design system with theme tokens */
     :root {
       --bg: #f4f5f6;
       --surface: #fcfcfb;
-      --ink: #212326; /* charcoal black */
+      --ink: #212326;
       --muted: #6f747c;
       --line: #e5e7ea;
       --accent: #4b6b8f;
@@ -839,8 +838,9 @@ DEMO_HTML = """<!doctype html>
       --success: #2f7d53;
       --danger: #a44747;
       --radius: 14px;
+      --nav-h: 56px;
     }
-    [data-theme=\"warm\"] {
+    [data-theme="warm"] {
       --bg: #f5f3ef;
       --surface: #fffdf9;
       --ink: #24211f;
@@ -849,10 +849,10 @@ DEMO_HTML = """<!doctype html>
       --accent: #7d6b5a;
       --accent-soft: #f2ece4;
     }
-    [data-theme=\"soft-dark\"] {
+    [data-theme="soft-dark"] {
       --bg: #1f2124;
       --surface: #2a2d31;
-      --ink: #f5f4f2; /* milky white */
+      --ink: #f5f4f2;
       --muted: #b8bcc3;
       --line: #3a3f45;
       --accent: #8aa4c2;
@@ -860,151 +860,467 @@ DEMO_HTML = """<!doctype html>
       --success: #80c89f;
       --danger: #e29595;
     }
+
     * { box-sizing: border-box; }
+    html, body { height: 100%; }
     body {
       margin: 0;
       background: radial-gradient(circle at top left, var(--accent-soft), var(--bg) 42%);
       color: var(--ink);
-      font-family: \"Inter\", \"Segoe UI\", ui-sans-serif, system-ui, sans-serif;
+      font-family: "Inter", "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+      -webkit-font-smoothing: antialiased;
+      text-rendering: optimizeLegibility;
     }
-    .container { max-width: 1080px; margin: 20px auto; padding: 0 14px 20px; }
+
+    .app {
+      max-width: 1080px;
+      margin: 0 auto;
+      min-height: 100%;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      padding-bottom: calc(var(--nav-h) + 12px);
+    }
+
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      backdrop-filter: blur(12px);
+      background: color-mix(in srgb, var(--surface) 88%, transparent);
+      border-bottom: 1px solid var(--line);
+      padding: env(safe-area-inset-top) 12px 10px;
+    }
+
+    .topbar-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      min-height: 42px;
+    }
+
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 700;
+      letter-spacing: -.01em;
+      font-size: 1rem;
+    }
+
+    .icon-btn, .btn {
+      border-radius: 11px;
+      border: 1px solid var(--line);
+      background: var(--surface);
+      color: var(--ink);
+      padding: 9px 12px;
+      font-size: .9rem;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      white-space: nowrap;
+    }
+
+    .btn.primary {
+      background: var(--accent);
+      color: #fff;
+      border-color: var(--accent);
+      font-weight: 600;
+    }
+
+    .btn:disabled, .icon-btn:disabled { opacity: .6; cursor: not-allowed; }
+
+    .whoami {
+      color: var(--muted);
+      font-size: .84rem;
+      margin-top: 6px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .popup {
+      position: fixed;
+      inset: 0;
+      z-index: 40;
+      display: none;
+      align-items: flex-start;
+      justify-content: flex-end;
+      padding: calc(env(safe-area-inset-top) + 56px) 12px 12px;
+      background: rgba(0,0,0,.18);
+    }
+
+    .popup.open { display: flex; }
+
+    .popup-menu {
+      width: min(240px, 88vw);
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      box-shadow: 0 14px 30px rgba(0,0,0,.12);
+      padding: 8px;
+      display: grid;
+      gap: 6px;
+    }
+
+    .menu-item {
+      width: 100%;
+      text-align: left;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--surface);
+      color: var(--ink);
+      padding: 10px 11px;
+      font-size: .88rem;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+    }
+
+    .content {
+      padding: 12px;
+      display: grid;
+      gap: 12px;
+      align-content: start;
+    }
+
+    .snap-row {
+      display: grid;
+      grid-auto-flow: column;
+      grid-auto-columns: minmax(84vw, 1fr);
+      gap: 12px;
+      overflow-x: auto;
+      scroll-snap-type: x mandatory;
+      padding-bottom: 4px;
+      -webkit-overflow-scrolling: touch;
+    }
+
+    .snap-row > .card {
+      scroll-snap-align: start;
+    }
+
     .card {
       background: var(--surface);
       border: 1px solid var(--line);
       border-radius: var(--radius);
       box-shadow: 0 8px 22px rgba(0,0,0,.04);
-      padding: 16px;
-      margin-bottom: 14px;
+      padding: 14px;
     }
-    .head { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
-    h1, h2 { margin: 0; font-weight: 700; letter-spacing: -.01em; }
-    h1 { font-size: 1.22rem; }
-    h2 { font-size: 1rem; }
-    .muted { color: var(--muted); font-size: .92rem; }
-    .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
-    .input, .btn {
-      border-radius: 11px;
-      border: 1px solid var(--line);
-      padding: 10px 12px;
-      font-size: .92rem;
-      background: var(--surface);
-      color: var(--ink);
+
+    .card-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 10px;
     }
-    .btn {
-      background: var(--accent);
-      color: #fff;
-      border-color: var(--accent);
-      font-weight: 600;
-      cursor: pointer;
+
+    .title {
+      margin: 0;
+      font-size: .96rem;
+      font-weight: 700;
       display: inline-flex;
       align-items: center;
-      gap: 6px;
+      gap: 7px;
+      min-width: 0;
     }
-    .btn.ghost {
-      background: var(--surface);
-      color: var(--ink);
-      border-color: var(--line);
-      font-weight: 500;
-    }
-    .btn:disabled { opacity: .6; cursor: not-allowed; }
-    .status { font-size: .9rem; font-weight: 600; margin-top: 8px; color: var(--muted); }
-    .ok { color: var(--success); }
-    .bad { color: var(--danger); }
-    .table-wrap { overflow: auto; border: 1px solid var(--line); border-radius: 12px; }
-    table { width: 100%; border-collapse: collapse; min-width: 760px; font-size: .88rem; }
-    th, td { padding: 10px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
-    th { background: color-mix(in srgb, var(--surface) 92%, var(--accent-soft)); color: var(--muted); font-weight: 600; }
-    tr:last-child td { border-bottom: 0; }
-    pre {
-      margin: 10px 0 0;
-      background: color-mix(in srgb, var(--surface) 94%, var(--accent-soft));
-      border: 1px solid var(--line);
-      border-radius: 11px;
-      padding: 12px;
-      max-height: 250px;
-      overflow: auto;
-      font-size: .78rem;
-    }
-    .pager { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+
     .badge {
       border: 1px solid var(--line);
       background: color-mix(in srgb, var(--surface) 88%, var(--accent-soft));
       border-radius: 999px;
       padding: 4px 9px;
-      font-size: .78rem;
+      font-size: .75rem;
       color: var(--muted);
+      flex-shrink: 0;
+    }
+
+    .controls {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 9px;
+    }
+
+    .control-row {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: nowrap;
+    }
+
+    .input {
+      width: 100%;
+      min-width: 0;
+      border: 1px solid var(--line);
+      background: var(--surface);
+      color: var(--ink);
+      border-radius: 11px;
+      padding: 10px 12px;
+      font-size: .9rem;
+    }
+
+    .status { font-size: .88rem; font-weight: 600; margin-top: 8px; color: var(--muted); }
+    .ok { color: var(--success); }
+    .bad { color: var(--danger); }
+
+    .collapsible {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      overflow: hidden;
+      margin-top: 10px;
+    }
+
+    .collapse-head {
+      width: 100%;
+      background: color-mix(in srgb, var(--surface) 92%, var(--accent-soft));
+      border: 0;
+      color: var(--ink);
+      padding: 10px 12px;
+      font-weight: 600;
+      text-align: left;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      cursor: pointer;
+    }
+
+    .collapse-body {
+      max-height: 0;
+      overflow: hidden;
+      transition: max-height .22s ease;
+      background: var(--surface);
+    }
+
+    .collapsible.open .collapse-body { max-height: 280px; }
+
+    pre {
+      margin: 0;
+      padding: 12px;
+      max-height: 260px;
+      overflow: auto;
+      font-size: .78rem;
+      background: color-mix(in srgb, var(--surface) 94%, var(--accent-soft));
+    }
+
+    .table-wrap {
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      max-height: 52vh;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: separate;
+      border-spacing: 0;
+      min-width: 660px;
+      font-size: .84rem;
+    }
+
+    th, td {
+      padding: 9px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      white-space: nowrap;
+      vertical-align: middle;
+    }
+
+    th {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      background: color-mix(in srgb, var(--surface) 92%, var(--accent-soft));
+      color: var(--muted);
+      font-weight: 600;
+    }
+
+    tr:last-child td { border-bottom: 0; }
+
+    .pager {
+      margin-top: 10px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .pager .group { display: inline-flex; gap: 8px; align-items: center; }
+
+    .bottom-nav {
+      position: fixed;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      z-index: 30;
+      height: var(--nav-h);
+      background: color-mix(in srgb, var(--surface) 88%, transparent);
+      backdrop-filter: blur(10px);
+      border-top: 1px solid var(--line);
+      display: flex;
+      justify-content: center;
+      padding-bottom: env(safe-area-inset-bottom);
+    }
+
+    .bottom-wrap {
+      width: min(1080px, 100%);
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+      padding: 8px 12px;
+    }
+
+    .nav-btn {
+      border: 1px solid var(--line);
+      background: var(--surface);
+      color: var(--muted);
+      border-radius: 10px;
+      font-size: .8rem;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+    }
+
+    .nav-btn.active {
+      color: var(--ink);
+      border-color: var(--accent);
+      background: color-mix(in srgb, var(--surface) 74%, var(--accent-soft));
+    }
+
+    @media (min-width: 860px) {
+      .content { padding: 16px; }
+      .snap-row {
+        grid-auto-flow: row;
+        grid-template-columns: 1fr 1fr;
+        overflow: visible;
+        scroll-snap-type: none;
+      }
+      .snap-row > .card { min-height: 100%; }
+      .bottom-nav { display: none; }
+      .app { padding-bottom: 18px; }
+      .controls { grid-template-columns: 1fr auto; align-items: center; }
+      .controls .full { grid-column: 1 / -1; }
     }
   </style>
 </head>
-<body data-theme=\"default\">
-  <div class=\"container\">
-    <div class=\"card\">
-      <div class=\"head\">
-        <h1><iconify-icon icon=\"solar:shield-user-outline\"></iconify-icon> Aadhaar Scanner</h1>
-        <div class=\"row\">
-          <button class=\"btn ghost\" data-theme-btn=\"default\">Default</button>
-          <button class=\"btn ghost\" data-theme-btn=\"warm\">Warm</button>
-          <button class=\"btn ghost\" data-theme-btn=\"soft-dark\">Soft Dark</button>
+<body data-theme="default">
+  <div class="app">
+    <header class="topbar">
+      <div class="topbar-row">
+        <div class="brand"><iconify-icon icon="solar:shield-user-outline"></iconify-icon> Aadhaar Scanner</div>
+        <button id="menuBtn" class="icon-btn" aria-label="Menu"><iconify-icon icon="solar:hamburger-menu-outline"></iconify-icon></button>
+      </div>
+      <div class="whoami" id="whoami">Authenticating...</div>
+    </header>
+
+    <main class="content">
+      <div class="snap-row">
+        <section class="card" id="card-upload">
+          <div class="card-head">
+            <h2 class="title"><iconify-icon icon="solar:document-add-outline"></iconify-icon> Parse Aadhaar</h2>
+            <span class="badge">Secure</span>
+          </div>
+          <div class="controls">
+            <div class="control-row full">
+              <input id="file" class="input" type="file" accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp" />
+            </div>
+            <div class="control-row">
+              <button id="parseBtn" class="btn primary"><iconify-icon icon="solar:play-circle-outline"></iconify-icon> Parse</button>
+            </div>
+          </div>
+          <div id="parseStatus" class="status">Idle</div>
+          <div class="collapsible" id="parseCollapse">
+            <button class="collapse-head" id="parseToggle">
+              <span>Parsed JSON</span>
+              <iconify-icon icon="solar:alt-arrow-down-outline"></iconify-icon>
+            </button>
+            <div class="collapse-body">
+              <pre id="parseResult">{}</pre>
+            </div>
+          </div>
+        </section>
+
+        <section class="card" id="card-mine">
+          <div class="card-head">
+            <h2 class="title"><iconify-icon icon="solar:history-outline"></iconify-icon> My Records</h2>
+            <span class="badge" id="myCount">0 records</span>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr><th>Created At</th><th>Name</th><th>DOB</th><th>UID</th><th>Gender</th><th>Source</th></tr>
+              </thead>
+              <tbody id="myRows"></tbody>
+            </table>
+          </div>
+          <div class="pager">
+            <span class="muted" id="myPageInfo">Page 1</span>
+            <div class="group">
+              <button id="myPrev" class="btn">Prev</button>
+              <button id="myNext" class="btn">Next</button>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <section class="card" id="adminCard" style="display:none">
+        <div class="card-head">
+          <h2 class="title"><iconify-icon icon="solar:magnifer-outline"></iconify-icon> Admin Search</h2>
+          <span class="badge" id="adminCount">0 results</span>
         </div>
-      </div>
-      <div class=\"muted\" id=\"whoami\">Authenticating...</div>
-      <div class=\"row\" style=\"margin-top:10px\">
-        <input id=\"file\" class=\"input\" type=\"file\" accept=\".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp\" />
-        <button id=\"parseBtn\" class=\"btn\"><iconify-icon icon=\"solar:document-add-outline\"></iconify-icon> Parse Aadhaar</button>
-      </div>
-      <div id=\"parseStatus\" class=\"status\">Idle</div>
-      <pre id=\"parseResult\">{}</pre>
-    </div>
+        <div class="controls">
+          <div class="control-row full">
+            <input id="keyword" class="input" placeholder="Search username, name, UID, gender" />
+          </div>
+          <div class="control-row">
+            <button id="searchBtn" class="btn primary"><iconify-icon icon="solar:magnifer-outline"></iconify-icon> Search</button>
+            <button id="clearSearchBtn" class="btn"><iconify-icon icon="solar:close-circle-outline"></iconify-icon> Clear</button>
+          </div>
+        </div>
+        <div class="table-wrap" style="margin-top:10px">
+          <table>
+            <thead>
+              <tr><th>Created At</th><th>User ID</th><th>Username</th><th>Name</th><th>DOB</th><th>UID</th><th>Gender</th></tr>
+            </thead>
+            <tbody id="adminRows"></tbody>
+          </table>
+        </div>
+        <div class="pager">
+          <span class="muted" id="adminPageInfo">Page 1</span>
+          <div class="group">
+            <button id="adminPrev" class="btn">Prev</button>
+            <button id="adminNext" class="btn">Next</button>
+          </div>
+        </div>
+      </section>
+    </main>
 
-    <div class=\"card\">
-      <div class=\"head\">
-        <h2><iconify-icon icon=\"solar:history-outline\"></iconify-icon> My Parsed Records</h2>
-        <span class=\"badge\" id=\"myCount\">0 records</span>
+    <nav class="bottom-nav">
+      <div class="bottom-wrap">
+        <button class="nav-btn active" data-target="card-upload"><iconify-icon icon="solar:document-add-outline"></iconify-icon> Parse</button>
+        <button class="nav-btn" data-target="card-mine"><iconify-icon icon="solar:history-outline"></iconify-icon> Records</button>
+        <button class="nav-btn" data-target="adminCard"><iconify-icon icon="solar:magnifer-outline"></iconify-icon> Admin</button>
       </div>
-      <div class=\"table-wrap\" style=\"margin-top:10px\">
-        <table>
-          <thead>
-            <tr><th>Created At</th><th>Name</th><th>DOB</th><th>UID</th><th>Gender</th><th>Source</th></tr>
-          </thead>
-          <tbody id=\"myRows\"></tbody>
-        </table>
-      </div>
-      <div class=\"pager\">
-        <button id=\"myPrev\" class=\"btn ghost\">Prev</button>
-        <button id=\"myNext\" class=\"btn ghost\">Next</button>
-      </div>
-    </div>
+    </nav>
+  </div>
 
-    <div class=\"card\" id=\"adminCard\" style=\"display:none\">
-      <div class=\"head\">
-        <h2><iconify-icon icon=\"solar:magnifer-outline\"></iconify-icon> Admin Search</h2>
-        <span class=\"badge\" id=\"adminCount\">0 results</span>
-      </div>
-      <div class=\"row\" style=\"margin-top:10px\">
-        <input id=\"keyword\" class=\"input\" placeholder=\"Search username, name, UID, gender\" style=\"min-width: 320px; flex: 1;\" />
-        <button id=\"searchBtn\" class=\"btn\"><iconify-icon icon=\"solar:magnifer-outline\"></iconify-icon> Search</button>
-        <button id=\"clearSearchBtn\" class=\"btn ghost\"><iconify-icon icon=\"solar:close-circle-outline\"></iconify-icon> Clear</button>
-      </div>
-      <div class=\"table-wrap\" style=\"margin-top:10px\">
-        <table>
-          <thead>
-            <tr><th>Created At</th><th>User ID</th><th>Username</th><th>Name</th><th>DOB</th><th>UID</th><th>Gender</th></tr>
-          </thead>
-          <tbody id=\"adminRows\"></tbody>
-        </table>
-      </div>
-      <div class=\"pager\">
-        <button id=\"adminPrev\" class=\"btn ghost\">Prev</button>
-        <button id=\"adminNext\" class=\"btn ghost\">Next</button>
-      </div>
+  <div id="popup" class="popup" aria-hidden="true">
+    <div class="popup-menu" role="menu">
+      <button class="menu-item" data-theme-btn="default"><iconify-icon icon="solar:palette-round-outline"></iconify-icon> Theme: Default</button>
+      <button class="menu-item" data-theme-btn="warm"><iconify-icon icon="solar:palette-round-outline"></iconify-icon> Theme: Warm</button>
+      <button class="menu-item" data-theme-btn="soft-dark"><iconify-icon icon="solar:palette-round-outline"></iconify-icon> Theme: Soft Dark</button>
+      <button class="menu-item" id="refreshAll"><iconify-icon icon="solar:refresh-outline"></iconify-icon> Refresh Data</button>
     </div>
   </div>
 
 <script>
 const tg = window.Telegram?.WebApp;
 if (tg) tg.ready();
-const initData = tg?.initData || \"\";
-const authHeader = { \"Authorization\": `tma ${initData}` };
+const initData = tg?.initData || "";
+const authHeader = { "Authorization": `tma ${initData}` };
 
 const parseBtn = document.getElementById('parseBtn');
 const fileInput = document.getElementById('file');
@@ -1038,6 +1354,11 @@ function setStatus(el, text, ok = true) {
   el.classList.add(ok ? 'ok' : 'bad');
 }
 
+function setPageInfo(elId, offset, limit) {
+  const page = Math.floor(offset / limit) + 1;
+  document.getElementById(elId).textContent = `Page ${page}`;
+}
+
 function myRowHtml(r) {
   return `<tr>
     <td>${formatTimestamp(r.created_at, true)}</td>
@@ -1066,12 +1387,19 @@ async function loadMine() {
   const data = await res.json();
   if (!res.ok) throw new Error(data?.detail?.message || 'Failed to load records');
   const rows = data.records || [];
-  document.getElementById('myRows').innerHTML = rows.map(myRowHtml).join('') || '<tr><td colspan=\"6\">No records</td></tr>';
+  document.getElementById('myRows').innerHTML = rows.map(myRowHtml).join('') || '<tr><td colspan="6">No records</td></tr>';
   document.getElementById('myCount').textContent = `${rows.length} records`;
   document.getElementById('myPrev').disabled = myOffset === 0;
   document.getElementById('myNext').disabled = rows.length < myLimit;
+  setPageInfo('myPageInfo', myOffset, myLimit);
+
   whoami.textContent = `Authenticated. Admin: ${data.is_admin ? 'Yes' : 'No'}`;
-  document.getElementById('adminCard').style.display = data.is_admin ? 'block' : 'none';
+  const adminCard = document.getElementById('adminCard');
+  adminCard.style.display = data.is_admin ? 'block' : 'none';
+
+  const adminNavBtn = document.querySelector('.nav-btn[data-target="adminCard"]');
+  if (adminNavBtn) adminNavBtn.style.display = data.is_admin ? 'inline-flex' : 'none';
+
   if (data.is_admin) await loadAdmin();
 }
 
@@ -1081,15 +1409,16 @@ async function loadAdmin() {
   const data = await res.json();
   const tbody = document.getElementById('adminRows');
   if (!res.ok) {
-    tbody.innerHTML = `<tr><td colspan=\"7\">${data?.detail?.message || 'Search failed'}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="7">${data?.detail?.message || 'Search failed'}</td></tr>`;
     document.getElementById('adminCount').textContent = '0 results';
     return;
   }
   const rows = data.records || [];
-  tbody.innerHTML = rows.map(adminRowHtml).join('') || '<tr><td colspan=\"7\">No results</td></tr>';
+  tbody.innerHTML = rows.map(adminRowHtml).join('') || '<tr><td colspan="7">No results</td></tr>';
   document.getElementById('adminCount').textContent = `${rows.length} results`;
   document.getElementById('adminPrev').disabled = adminOffset === 0;
   document.getElementById('adminNext').disabled = rows.length < adminLimit;
+  setPageInfo('adminPageInfo', adminOffset, adminLimit);
 }
 
 async function parseNow() {
@@ -1117,44 +1446,82 @@ async function parseNow() {
   }
 }
 
-document.getElementById('myPrev').addEventListener('click', async () => {
-  myOffset = Math.max(0, myOffset - myLimit);
-  await loadMine();
-});
-document.getElementById('myNext').addEventListener('click', async () => {
-  myOffset += myLimit;
-  await loadMine();
-});
-document.getElementById('adminPrev').addEventListener('click', async () => {
-  adminOffset = Math.max(0, adminOffset - adminLimit);
-  await loadAdmin();
-});
-document.getElementById('adminNext').addEventListener('click', async () => {
-  adminOffset += adminLimit;
-  await loadAdmin();
-});
-document.getElementById('searchBtn').addEventListener('click', async () => {
-  adminKeyword = (document.getElementById('keyword').value || '').trim();
-  adminOffset = 0;
-  await loadAdmin();
-});
-document.getElementById('clearSearchBtn').addEventListener('click', async () => {
-  document.getElementById('keyword').value = '';
-  adminKeyword = '';
-  adminOffset = 0;
-  await loadAdmin();
-});
-parseBtn.addEventListener('click', parseNow);
+function togglePopup(force) {
+  const popup = document.getElementById('popup');
+  const open = force !== undefined ? force : !popup.classList.contains('open');
+  popup.classList.toggle('open', open);
+  popup.setAttribute('aria-hidden', String(!open));
+}
 
-document.querySelectorAll('[data-theme-btn]').forEach(btn => {
-  btn.addEventListener('click', () => {
-    document.body.setAttribute('data-theme', btn.getAttribute('data-theme-btn'));
+function setupInteractions() {
+  document.getElementById('parseToggle').addEventListener('click', () => {
+    document.getElementById('parseCollapse').classList.toggle('open');
   });
-});
 
+  document.getElementById('myPrev').addEventListener('click', async () => {
+    myOffset = Math.max(0, myOffset - myLimit);
+    await loadMine();
+  });
+  document.getElementById('myNext').addEventListener('click', async () => {
+    myOffset += myLimit;
+    await loadMine();
+  });
+  document.getElementById('adminPrev').addEventListener('click', async () => {
+    adminOffset = Math.max(0, adminOffset - adminLimit);
+    await loadAdmin();
+  });
+  document.getElementById('adminNext').addEventListener('click', async () => {
+    adminOffset += adminLimit;
+    await loadAdmin();
+  });
+
+  document.getElementById('searchBtn').addEventListener('click', async () => {
+    adminKeyword = (document.getElementById('keyword').value || '').trim();
+    adminOffset = 0;
+    await loadAdmin();
+  });
+  document.getElementById('clearSearchBtn').addEventListener('click', async () => {
+    document.getElementById('keyword').value = '';
+    adminKeyword = '';
+    adminOffset = 0;
+    await loadAdmin();
+  });
+
+  parseBtn.addEventListener('click', parseNow);
+
+  document.querySelectorAll('[data-theme-btn]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.body.setAttribute('data-theme', btn.getAttribute('data-theme-btn'));
+      togglePopup(false);
+    });
+  });
+
+  const menuBtn = document.getElementById('menuBtn');
+  const popup = document.getElementById('popup');
+  menuBtn.addEventListener('click', () => togglePopup());
+  popup.addEventListener('click', (e) => {
+    if (e.target === popup) togglePopup(false);
+  });
+
+  document.getElementById('refreshAll').addEventListener('click', async () => {
+    togglePopup(false);
+    await loadMine();
+  });
+
+  document.querySelectorAll('.nav-btn[data-target]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.nav-btn').forEach(x => x.classList.remove('active'));
+      btn.classList.add('active');
+      const target = document.getElementById(btn.getAttribute('data-target'));
+      if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  });
+}
+
+setupInteractions();
 loadMine().catch(err => {
   whoami.textContent = `Auth failed: ${err.message}`;
-  whoami.style.color = 'var(--danger)';
+  whoami.classList.add('bad');
 });
 </script>
 </body>
