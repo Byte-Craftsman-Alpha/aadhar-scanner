@@ -382,17 +382,19 @@ class SupabaseStore:
         return result.data or []
 
     def admin_search(self, keyword: str, limit: int, offset: int) -> list[dict[str, Any]]:
-        like_term = f"%{keyword.strip()}%"
-        fields = ["telegram_username", "name", "dob", "uid", "gender", "source"]
-        or_query = ",".join(f"{f}.ilike.{like_term}" for f in fields)
-        result = (
+        base_query = (
             self.client.table(self.table)
             .select("id,telegram_user_id,telegram_username,name,dob,uid,gender,source,created_at")
-            .or_(or_query)
             .order("created_at", desc=True)
             .range(offset, offset + limit - 1)
-            .execute()
         )
+        if keyword.strip():
+            like_term = f"%{keyword.strip()}%"
+            fields = ["telegram_username", "name", "dob", "uid", "gender", "source"]
+            or_query = ",".join(f"{f}.ilike.{like_term}" for f in fields)
+            result = base_query.or_(or_query).execute()
+        else:
+            result = base_query.execute()
         return result.data or []
 
 
@@ -716,9 +718,7 @@ async def my_parses(limit: int = 25, offset: int = 0, user: TelegramUserCtx = De
 
 
 @app.get("/api/admin/search", response_model=ParseListResponse)
-async def admin_search(keyword: str, limit: int = 50, offset: int = 0, user: TelegramUserCtx = Depends(ensure_admin)) -> ParseListResponse:
-    if not keyword.strip():
-        raise HTTPException(status_code=400, detail={"error": "invalid_keyword", "message": "keyword cannot be empty."})
+async def admin_search(keyword: str = "", limit: int = 50, offset: int = 0, user: TelegramUserCtx = Depends(ensure_admin)) -> ParseListResponse:
     if limit < 1 or limit > 200:
         raise HTTPException(status_code=400, detail={"error": "invalid_limit", "message": "limit must be between 1 and 200."})
     if offset < 0:
@@ -825,44 +825,143 @@ DEMO_HTML = """<!doctype html>
   <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />
   <title>Aadhaar Scanner Mini App</title>
   <script src=\"https://telegram.org/js/telegram-web-app.js\"></script>
+  <script src=\"https://code.iconify.design/iconify-icon/1.0.8/iconify-icon.min.js\"></script>
   <style>
-    :root { --bg:#f4f7fb; --card:#fff; --ink:#15243a; --muted:#5a6b80; --line:#d7e1ee; --brand:#0d4f96; --ok:#0b6b20; --bad:#a31525; }
-    * { box-sizing:border-box; }
-    body { margin:0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto; background: radial-gradient(circle at 10% 10%, #eaf3ff, var(--bg)); color: var(--ink); }
-    .wrap { max-width: 980px; margin: 20px auto; padding: 0 14px; }
-    .card { background:var(--card); border-radius: 14px; box-shadow: 0 10px 24px rgba(18,37,58,.08); border:1px solid #e4ecf6; padding:16px; margin-bottom:14px; }
-    h1 { margin:0 0 8px; font-size:1.3rem; }
-    .muted { color:var(--muted); }
-    .row { display:flex; gap:10px; flex-wrap:wrap; }
-    .input, button { padding:10px 12px; border-radius:10px; border:1px solid #c9d8ea; }
-    button { background:var(--brand); color:white; border:0; font-weight:600; cursor:pointer; }
-    button[disabled] { opacity:.6; cursor:not-allowed; }
-    table { width:100%; border-collapse: collapse; font-size:.93rem; }
-    th, td { border:1px solid var(--line); padding:8px; text-align:left; }
-    th { background:#f5f9ff; }
-    .status { font-weight:700; margin-top:8px; }
-    pre { overflow:auto; background:#f7fbff; border:1px solid var(--line); border-radius:10px; padding:10px; }
+    /* Minimals.cc inspired neutral design system with theme tokens */
+    :root {
+      --bg: #f4f5f6;
+      --surface: #fcfcfb;
+      --ink: #212326; /* charcoal black */
+      --muted: #6f747c;
+      --line: #e5e7ea;
+      --accent: #4b6b8f;
+      --accent-soft: #e9eef5;
+      --success: #2f7d53;
+      --danger: #a44747;
+      --radius: 14px;
+    }
+    [data-theme=\"warm\"] {
+      --bg: #f5f3ef;
+      --surface: #fffdf9;
+      --ink: #24211f;
+      --muted: #786f67;
+      --line: #ebe3d8;
+      --accent: #7d6b5a;
+      --accent-soft: #f2ece4;
+    }
+    [data-theme=\"soft-dark\"] {
+      --bg: #1f2124;
+      --surface: #2a2d31;
+      --ink: #f5f4f2; /* milky white */
+      --muted: #b8bcc3;
+      --line: #3a3f45;
+      --accent: #8aa4c2;
+      --accent-soft: #313a44;
+      --success: #80c89f;
+      --danger: #e29595;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: radial-gradient(circle at top left, var(--accent-soft), var(--bg) 42%);
+      color: var(--ink);
+      font-family: \"Inter\", \"Segoe UI\", ui-sans-serif, system-ui, sans-serif;
+    }
+    .container { max-width: 1080px; margin: 20px auto; padding: 0 14px 20px; }
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: 0 8px 22px rgba(0,0,0,.04);
+      padding: 16px;
+      margin-bottom: 14px;
+    }
+    .head { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+    h1, h2 { margin: 0; font-weight: 700; letter-spacing: -.01em; }
+    h1 { font-size: 1.22rem; }
+    h2 { font-size: 1rem; }
+    .muted { color: var(--muted); font-size: .92rem; }
+    .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+    .input, .btn {
+      border-radius: 11px;
+      border: 1px solid var(--line);
+      padding: 10px 12px;
+      font-size: .92rem;
+      background: var(--surface);
+      color: var(--ink);
+    }
+    .btn {
+      background: var(--accent);
+      color: #fff;
+      border-color: var(--accent);
+      font-weight: 600;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .btn.ghost {
+      background: var(--surface);
+      color: var(--ink);
+      border-color: var(--line);
+      font-weight: 500;
+    }
+    .btn:disabled { opacity: .6; cursor: not-allowed; }
+    .status { font-size: .9rem; font-weight: 600; margin-top: 8px; color: var(--muted); }
+    .ok { color: var(--success); }
+    .bad { color: var(--danger); }
+    .table-wrap { overflow: auto; border: 1px solid var(--line); border-radius: 12px; }
+    table { width: 100%; border-collapse: collapse; min-width: 760px; font-size: .88rem; }
+    th, td { padding: 10px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
+    th { background: color-mix(in srgb, var(--surface) 92%, var(--accent-soft)); color: var(--muted); font-weight: 600; }
+    tr:last-child td { border-bottom: 0; }
+    pre {
+      margin: 10px 0 0;
+      background: color-mix(in srgb, var(--surface) 94%, var(--accent-soft));
+      border: 1px solid var(--line);
+      border-radius: 11px;
+      padding: 12px;
+      max-height: 250px;
+      overflow: auto;
+      font-size: .78rem;
+    }
+    .pager { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+    .badge {
+      border: 1px solid var(--line);
+      background: color-mix(in srgb, var(--surface) 88%, var(--accent-soft));
+      border-radius: 999px;
+      padding: 4px 9px;
+      font-size: .78rem;
+      color: var(--muted);
+    }
   </style>
 </head>
-<body>
-  <div class=\"wrap\">
+<body data-theme=\"default\">
+  <div class=\"container\">
     <div class=\"card\">
-      <h1>Aadhaar Scanner</h1>
+      <div class=\"head\">
+        <h1><iconify-icon icon=\"solar:shield-user-outline\"></iconify-icon> Aadhaar Scanner</h1>
+        <div class=\"row\">
+          <button class=\"btn ghost\" data-theme-btn=\"default\">Default</button>
+          <button class=\"btn ghost\" data-theme-btn=\"warm\">Warm</button>
+          <button class=\"btn ghost\" data-theme-btn=\"soft-dark\">Soft Dark</button>
+        </div>
+      </div>
       <div class=\"muted\" id=\"whoami\">Authenticating...</div>
       <div class=\"row\" style=\"margin-top:10px\">
         <input id=\"file\" class=\"input\" type=\"file\" accept=\".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp\" />
-        <button id=\"parseBtn\">Parse Aadhaar</button>
+        <button id=\"parseBtn\" class=\"btn\"><iconify-icon icon=\"solar:document-add-outline\"></iconify-icon> Parse Aadhaar</button>
       </div>
       <div id=\"parseStatus\" class=\"status\">Idle</div>
       <pre id=\"parseResult\">{}</pre>
     </div>
 
     <div class=\"card\">
-      <h2 style=\"margin:0 0 8px;font-size:1.05rem\">My Parsed Aadhaar Records</h2>
-      <div class=\"row\">
-        <button id=\"refreshBtn\">Refresh</button>
+      <div class=\"head\">
+        <h2><iconify-icon icon=\"solar:history-outline\"></iconify-icon> My Parsed Records</h2>
+        <span class=\"badge\" id=\"myCount\">0 records</span>
       </div>
-      <div style=\"overflow:auto;margin-top:10px\">
+      <div class=\"table-wrap\" style=\"margin-top:10px\">
         <table>
           <thead>
             <tr><th>Created At</th><th>Name</th><th>DOB</th><th>UID</th><th>Gender</th><th>Source</th></tr>
@@ -870,21 +969,33 @@ DEMO_HTML = """<!doctype html>
           <tbody id=\"myRows\"></tbody>
         </table>
       </div>
+      <div class=\"pager\">
+        <button id=\"myPrev\" class=\"btn ghost\">Prev</button>
+        <button id=\"myNext\" class=\"btn ghost\">Next</button>
+      </div>
     </div>
 
     <div class=\"card\" id=\"adminCard\" style=\"display:none\">
-      <h2 style=\"margin:0 0 8px;font-size:1.05rem\">Admin Search</h2>
-      <div class=\"row\">
-        <input id=\"keyword\" class=\"input\" placeholder=\"Search name/uid/gender\" />
-        <button id=\"searchBtn\">Search</button>
+      <div class=\"head\">
+        <h2><iconify-icon icon=\"solar:magnifer-outline\"></iconify-icon> Admin Search</h2>
+        <span class=\"badge\" id=\"adminCount\">0 results</span>
       </div>
-      <div style=\"overflow:auto;margin-top:10px\">
+      <div class=\"row\" style=\"margin-top:10px\">
+        <input id=\"keyword\" class=\"input\" placeholder=\"Search username, name, UID, gender\" style=\"min-width: 320px; flex: 1;\" />
+        <button id=\"searchBtn\" class=\"btn\"><iconify-icon icon=\"solar:magnifer-outline\"></iconify-icon> Search</button>
+        <button id=\"clearSearchBtn\" class=\"btn ghost\"><iconify-icon icon=\"solar:close-circle-outline\"></iconify-icon> Clear</button>
+      </div>
+      <div class=\"table-wrap\" style=\"margin-top:10px\">
         <table>
           <thead>
-            <tr><th>User ID</th><th>Username</th><th>Name</th><th>DOB</th><th>UID</th><th>Gender</th><th>At</th></tr>
+            <tr><th>Created At</th><th>User ID</th><th>Username</th><th>Name</th><th>DOB</th><th>UID</th><th>Gender</th></tr>
           </thead>
           <tbody id=\"adminRows\"></tbody>
         </table>
+      </div>
+      <div class=\"pager\">
+        <button id=\"adminPrev\" class=\"btn ghost\">Prev</button>
+        <button id=\"adminNext\" class=\"btn ghost\">Next</button>
       </div>
     </div>
   </div>
@@ -892,8 +1003,8 @@ DEMO_HTML = """<!doctype html>
 <script>
 const tg = window.Telegram?.WebApp;
 if (tg) tg.ready();
-const initData = tg?.initData || "";
-const authHeader = { "Authorization": `tma ${initData}` };
+const initData = tg?.initData || \"\";
+const authHeader = { \"Authorization\": `tma ${initData}` };
 
 const parseBtn = document.getElementById('parseBtn');
 const fileInput = document.getElementById('file');
@@ -901,29 +1012,94 @@ const parseStatus = document.getElementById('parseStatus');
 const parseResult = document.getElementById('parseResult');
 const whoami = document.getElementById('whoami');
 
-function rowHtml(r) {
-  return `<tr><td>${r.created_at || ''}</td><td>${r.name || ''}</td><td>${r.dob || ''}</td><td>${r.uid || ''}</td><td>${r.gender || ''}</td><td>${r.source || ''}</td></tr>`;
+const myLimit = 20;
+let myOffset = 0;
+const adminLimit = 20;
+let adminOffset = 0;
+let adminKeyword = '';
+
+function formatTimestamp(v, withTime = true) {
+  if (!v) return '';
+  const d = new Date(v);
+  if (Number.isNaN(d.getTime())) return v;
+  const dd = String(d.getDate()).padStart(2, '0');
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const yyyy = d.getFullYear();
+  if (!withTime) return `${dd}-${mm}-${yyyy}`;
+  const hh = String(d.getHours()).padStart(2, '0');
+  const min = String(d.getMinutes()).padStart(2, '0');
+  const ss = String(d.getSeconds()).padStart(2, '0');
+  return `${dd}-${mm}-${yyyy} ${hh}:${min}:${ss}`;
+}
+
+function setStatus(el, text, ok = true) {
+  el.textContent = text;
+  el.classList.remove('ok', 'bad');
+  el.classList.add(ok ? 'ok' : 'bad');
+}
+
+function myRowHtml(r) {
+  return `<tr>
+    <td>${formatTimestamp(r.created_at, true)}</td>
+    <td>${r.name || ''}</td>
+    <td>${r.dob || ''}</td>
+    <td>${r.uid || ''}</td>
+    <td>${r.gender || ''}</td>
+    <td>${r.source || ''}</td>
+  </tr>`;
+}
+
+function adminRowHtml(r) {
+  return `<tr>
+    <td>${formatTimestamp(r.created_at, true)}</td>
+    <td>${r.telegram_user_id || ''}</td>
+    <td>${r.telegram_username || ''}</td>
+    <td>${r.name || ''}</td>
+    <td>${r.dob || ''}</td>
+    <td>${r.uid || ''}</td>
+    <td>${r.gender || ''}</td>
+  </tr>`;
 }
 
 async function loadMine() {
-  const res = await fetch('/api/me/parses?limit=50&offset=0', { headers: authHeader });
+  const res = await fetch(`/api/me/parses?limit=${myLimit}&offset=${myOffset}`, { headers: authHeader });
   const data = await res.json();
   if (!res.ok) throw new Error(data?.detail?.message || 'Failed to load records');
-  document.getElementById('myRows').innerHTML = (data.records || []).map(rowHtml).join('') || '<tr><td colspan="6">No records</td></tr>';
+  const rows = data.records || [];
+  document.getElementById('myRows').innerHTML = rows.map(myRowHtml).join('') || '<tr><td colspan=\"6\">No records</td></tr>';
+  document.getElementById('myCount').textContent = `${rows.length} records`;
+  document.getElementById('myPrev').disabled = myOffset === 0;
+  document.getElementById('myNext').disabled = rows.length < myLimit;
   whoami.textContent = `Authenticated. Admin: ${data.is_admin ? 'Yes' : 'No'}`;
   document.getElementById('adminCard').style.display = data.is_admin ? 'block' : 'none';
+  if (data.is_admin) await loadAdmin();
+}
+
+async function loadAdmin() {
+  const url = `/api/admin/search?keyword=${encodeURIComponent(adminKeyword)}&limit=${adminLimit}&offset=${adminOffset}`;
+  const res = await fetch(url, { headers: authHeader });
+  const data = await res.json();
+  const tbody = document.getElementById('adminRows');
+  if (!res.ok) {
+    tbody.innerHTML = `<tr><td colspan=\"7\">${data?.detail?.message || 'Search failed'}</td></tr>`;
+    document.getElementById('adminCount').textContent = '0 results';
+    return;
+  }
+  const rows = data.records || [];
+  tbody.innerHTML = rows.map(adminRowHtml).join('') || '<tr><td colspan=\"7\">No results</td></tr>';
+  document.getElementById('adminCount').textContent = `${rows.length} results`;
+  document.getElementById('adminPrev').disabled = adminOffset === 0;
+  document.getElementById('adminNext').disabled = rows.length < adminLimit;
 }
 
 async function parseNow() {
   const f = fileInput.files?.[0];
   if (!f) {
-    parseStatus.textContent = 'Choose a file first';
-    parseStatus.style.color = 'var(--bad)';
+    setStatus(parseStatus, 'Choose a file first', false);
     return;
   }
   parseBtn.disabled = true;
-  parseStatus.textContent = 'Processing...';
-  parseStatus.style.color = 'var(--ok)';
+  setStatus(parseStatus, 'Processing...', true);
   const fd = new FormData();
   fd.append('file', f);
   try {
@@ -931,38 +1107,54 @@ async function parseNow() {
     const data = await res.json();
     parseResult.textContent = JSON.stringify(data, null, 2);
     if (!res.ok) throw new Error(data?.detail?.message || 'Parse failed');
-    parseStatus.textContent = 'Parsed successfully';
+    setStatus(parseStatus, 'Parsed successfully', true);
+    myOffset = 0;
     await loadMine();
   } catch (e) {
-    parseStatus.textContent = e.message;
-    parseStatus.style.color = 'var(--bad)';
+    setStatus(parseStatus, e.message, false);
   } finally {
     parseBtn.disabled = false;
   }
 }
 
-async function adminSearch() {
-  const keyword = (document.getElementById('keyword').value || '').trim();
-  if (!keyword) return;
-  const res = await fetch(`/api/admin/search?keyword=${encodeURIComponent(keyword)}&limit=100`, { headers: authHeader });
-  const data = await res.json();
-  const tbody = document.getElementById('adminRows');
-  if (!res.ok) {
-    tbody.innerHTML = `<tr><td colspan=\"7\">${data?.detail?.message || 'Search failed'}</td></tr>`;
-    return;
-  }
-  tbody.innerHTML = (data.records || []).map(r =>
-    `<tr><td>${r.telegram_user_id || ''}</td><td>${r.telegram_username || ''}</td><td>${r.name || ''}</td><td>${r.dob || ''}</td><td>${r.uid || ''}</td><td>${r.gender || ''}</td><td>${r.created_at || ''}</td></tr>`
-  ).join('') || '<tr><td colspan="7">No results</td></tr>';
-}
-
-document.getElementById('refreshBtn').addEventListener('click', loadMine);
-document.getElementById('searchBtn').addEventListener('click', adminSearch);
+document.getElementById('myPrev').addEventListener('click', async () => {
+  myOffset = Math.max(0, myOffset - myLimit);
+  await loadMine();
+});
+document.getElementById('myNext').addEventListener('click', async () => {
+  myOffset += myLimit;
+  await loadMine();
+});
+document.getElementById('adminPrev').addEventListener('click', async () => {
+  adminOffset = Math.max(0, adminOffset - adminLimit);
+  await loadAdmin();
+});
+document.getElementById('adminNext').addEventListener('click', async () => {
+  adminOffset += adminLimit;
+  await loadAdmin();
+});
+document.getElementById('searchBtn').addEventListener('click', async () => {
+  adminKeyword = (document.getElementById('keyword').value || '').trim();
+  adminOffset = 0;
+  await loadAdmin();
+});
+document.getElementById('clearSearchBtn').addEventListener('click', async () => {
+  document.getElementById('keyword').value = '';
+  adminKeyword = '';
+  adminOffset = 0;
+  await loadAdmin();
+});
 parseBtn.addEventListener('click', parseNow);
+
+document.querySelectorAll('[data-theme-btn]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.body.setAttribute('data-theme', btn.getAttribute('data-theme-btn'));
+  });
+});
 
 loadMine().catch(err => {
   whoami.textContent = `Auth failed: ${err.message}`;
-  whoami.style.color = 'var(--bad)';
+  whoami.style.color = 'var(--danger)';
 });
 </script>
 </body>
